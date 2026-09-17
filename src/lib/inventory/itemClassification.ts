@@ -49,6 +49,10 @@ const FILTER_BY_PRODUCT = new Map<string, string>(
 
 const EQUIPMENT_COLLECTION_KEYS = new Set<string>(EQUIPMENT_COLLECTIONS);
 
+const NON_INVENTORY_UPGRADE_PATHS = new Set([
+  "/lotus/upgrades/mods/pistol/event/nightwave/nightwavelasgoopistolaugmentmod",
+]);
+
 interface SupplementalCollectionDef {
   key: string;
   cat: string;
@@ -346,6 +350,7 @@ export function shouldHide(
   resolved: ResolvedItem,
   marketListed = false,
 ): boolean {
+  if (NON_INVENTORY_UPGRADE_PATHS.has(internalName.toLowerCase())) return true;
   if (isMarketListedMissionKey(internalName, marketListed)) return false;
 
   if (isAuxiliaryInventoryItem(internalName, dbEntry, resolved)) return true;

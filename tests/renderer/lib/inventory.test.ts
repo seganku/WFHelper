@@ -504,6 +504,19 @@ describe("inventory parsing", () => {
     expect(arcane?.leveledUp).toBe(true);
   });
 
+  it("hides the Nightwave Las Goo placeholder even when WFM lists it", () => {
+    const placeholder =
+      "/Lotus/Upgrades/Mods/Pistol/Event/Nightwave/NightwaveLasGooPistolAugmentMod";
+
+    const items = parseInventory(
+      { Upgrades: [{ ItemType: placeholder, ItemCount: 1 }] },
+      {},
+      new Set([placeholder.toLowerCase()]),
+    );
+
+    expect(items).toHaveLength(0);
+  });
+
   it("sums combinedAmount across leveled and unleveled copies of a mod", () => {
     const bite = "/Lotus/Upgrades/Mods/Bite";
     const db: Record<string, ItemDbEntry> = {
