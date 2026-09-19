@@ -7,7 +7,12 @@
   // Aliased: a store named `tr` makes svelte-check flag every <tr> row as a lowercase component.
   import { locale, tr as t } from "../../lib/i18n.js";
   import type { MessageKey } from "../../lib/i18n.js";
-  import { formatPlat, itemKey, tradeItemLabel } from "../../lib/stats/tradeAnalytics.js";
+  import {
+    formatPlat,
+    itemKey,
+    itemKeyBase,
+    tradeItemLabel,
+  } from "../../lib/stats/tradeAnalytics.js";
   import type { AnalyticsItemLink } from "../../lib/stats/analyticsItemLink.js";
   import type { LedgerPage } from "../../../config/shared/tradeLedgerTypes.js";
   import type { TradeEvent, TradeItem, TradeType } from "../../types/ipc.js";
@@ -40,8 +45,6 @@
     onEdit,
   }: Props = $props();
 
-  // The parent only ever changes these through the callbacks below, so the local
-  // copies are seeded once instead of mirrored back on every prop change.
   let searchValue = $state(untrack(() => search));
   let typeValue = $state<TradeType | "all">(untrack(() => typeFilter));
 
@@ -67,11 +70,18 @@
   const canPrev = $derived(offset > 0);
   const canNext = $derived(offset + limit < total);
 
-  function countedItemLabel(item: TradeItem): string {
-    const label = tradeItemLabel(item);
-    const name = label.secondary ? `${label.primary} (${label.secondary})` : label.primary || "?";
-    return item.count > 1 ? `${item.count}x ${name}` : name;
-  }
+  // A helper that reads $t on its own is not reactive, because Svelte wraps template calls in untrack.
+  const countedItemLabel = $derived.by(() => {
+    const translate = $t;
+    return (item: TradeItem): string => {
+      const label = tradeItemLabel(item);
+      const qualifier =
+        label.secondary ??
+        (label.rank == null ? null : translate("browse.rankValue", { value: label.rank }));
+      const name = qualifier ? `${label.primary} (${qualifier})` : label.primary || "?";
+      return item.count > 1 ? `${item.count}x ${name}` : name;
+    };
+  });
 
   function dayLabel(iso: string, loc: string): string {
     const d = new Date(iso);
@@ -165,7 +175,7 @@
                     {:else}
                       {#each items as item, index (index)}
                         {@const link = itemLink.resolve(
-                          itemKey(item),
+                          itemKeyBase(itemKey(item)),
                           tradeItemLabel(item).primary,
                         )}
                         <!-- Svelte trims the space after a bare comma, so a margin makes the gap. -->

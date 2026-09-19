@@ -26,15 +26,17 @@ export interface DropInfo {
 
 export interface ComponentInfo {
   name: string;
-  /** Active game language. Render this; `name` stays English for lookups. */
   displayName?: string;
   uniqueName?: string;
   tradable?: boolean;
   itemCount?: number;
   ownedCount?: number;
   owned?: boolean;
-  /** Set in the mastery view when this part's blueprint is currently in the foundry. */
+  /** Copies actually crafted, which a held blueprint does not add to. */
+  built?: number;
   building?: boolean;
+  /** Its blueprint is in the inventory but the part itself has not been crafted. */
+  blueprintHeld?: boolean;
   drops?: DropInfo[];
   [key: string]: unknown;
 }
@@ -42,6 +44,7 @@ export interface ComponentInfo {
 export interface ItemDbEntry {
   /** English. Every by-name lookup and market slug is built from this. */
   name?: string;
+  nameIsFallback?: true;
   /** Active game language, absent when it matches `name`. Render this. */
   displayName?: string;
   /** Art is the framed wiki card, so a marketplace thumbnail must not replace it. */
@@ -64,9 +67,8 @@ export interface ItemDbEntry {
   masterable?: boolean;
   ducats?: number | null;
   recipe?: RecipeData;
-  /** For blueprint entries: uniqueName of the item this blueprint crafts. */
   buildsProduct?: string;
-  /** For blueprint entries: building it does not consume the owned copy. */
+  /** Building it does not consume the owned copy. */
   reusableBlueprint?: boolean;
   [key: string]: unknown;
 }
@@ -76,7 +78,6 @@ export interface RawInventoryEntry {
   ItemCount?: number;
   XP?: number;
   CompletionDate?: unknown;
-  /** Parts fitted to a modular build (kitgun, zaw, amp, K-Drive, Moa). */
   ModularParts?: string[];
   [key: string]: unknown;
 }
@@ -137,9 +138,9 @@ export type InventoryGroup =
 export interface ParsedItem extends MarketAcquisition {
   /** English. Every by-name lookup and market slug is built from this. */
   name: string;
+  nameIsFallback?: true;
   /** Active game language, absent when it matches `name`. Render this. */
   displayName?: string;
-  /** Art is the framed wiki card, so a marketplace thumbnail must not replace it. */
   cardArt?: true;
   internalName: string;
   category: string;
@@ -156,14 +157,11 @@ export interface ParsedItem extends MarketAcquisition {
   drops: DropInfo[];
   wikiaUrl: string | null;
   status?: MasteryStatus;
-  /** Mastery still on the table: what ranking this item to max would add. */
   masteryXpRemaining?: number;
   currentlyOwned?: boolean;
   /** Owned modular build that grants no mastery until it is gilded. */
   needsGilding?: boolean;
-  /** Stamped by attachPartMasteryFlags: the build this row belongs to is mastered. */
   parentMastered?: boolean;
-  /** That build is in the inventory now. Only set on parts and set rows. */
   parentOwned?: boolean;
   uniqueName?: string;
   inventoryKey?: string;
@@ -181,7 +179,6 @@ export interface ParsedItem extends MarketAcquisition {
   totalPartTypes?: number | null;
   orderPlaced?: boolean;
   partType?: PartType;
-  /** Fitted part names of a built modular item, resolved for display. */
   modularParts?: string[];
   inventoryGroup?: InventoryGroup;
   favorite?: boolean;
@@ -199,11 +196,8 @@ export interface FoundryBuildingItem {
   endDate: Date | null;
   /** Blueprint recipe uniqueName (the raw ItemType in PendingRecipes). */
   uniqueName: string | null;
-  /** Resolved product uniqueName (the thing being built), if the recipe could be mapped. */
   productUniqueName: string | null;
-  /** Product category (e.g. "Warframes", "Primary", "Gear"). "" when unresolved. */
   category: string;
-  /** Ingredient list + build cost from the product's recipe. Empty when no recipe. */
   ingredients: RecipeIngredient[];
   buildPrice: number;
 }
@@ -215,13 +209,9 @@ export interface FoundryRecipeItem {
   count: number;
   /** Blueprint recipe uniqueName (the raw ItemType in Recipes). */
   uniqueName: string | null;
-  /** Resolved product uniqueName (the thing this blueprint builds), if mapped. */
   productUniqueName: string | null;
-  /** True when the product is used as an ingredient in some other recipe. */
   isIngredient: boolean;
-  /** Product category (e.g. "Warframes", "Primary", "Gear"). "" when unresolved. */
   category: string;
-  /** Ingredient list + build cost from the product's recipe. Empty when no recipe. */
   ingredients: RecipeIngredient[];
   buildPrice: number;
   buildTime: number;

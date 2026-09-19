@@ -47,11 +47,12 @@
   import { tr } from "../lib/i18n.js";
   import EditLayoutBar from "../components/layout/EditLayoutBar.svelte";
   import LayoutGrid from "../components/layout/LayoutGrid.svelte";
-  import { parsedItems, wfmItems, inventoryData, itemDb } from "../stores/data.js";
+  import { parsedItems, wfmItems, inventoryData, itemDb, foundryData } from "../stores/data.js";
   import { masteryData } from "../stores/mastery.js";
   import { marketOrders } from "../stores/market.js";
   import { ensureMarketOrdersLoaded } from "../lib/marketOrdersSync.js";
   import { attachPartMasteryFlags, buildPartMasteryResolver } from "../lib/parentMastery.js";
+  import { foundryClaimableProducts } from "../lib/inventory/foundryResources.js";
   import { relicDb } from "../stores/relics.js";
   import InventoryHeader from "../components/inventory/InventoryHeader.svelte";
   import InventoryGrid from "../components/inventory/InventoryGrid.svelte";
@@ -572,7 +573,11 @@
   $: selectedItem = selectedInternalName
     ? tabItems.find((entry) => entry.internalName === selectedInternalName) || null
     : null;
-  $: partMastery = buildPartMasteryResolver($itemDb, $masteryData);
+  $: partMastery = buildPartMasteryResolver(
+    $itemDb,
+    $masteryData,
+    foundryClaimableProducts($foundryData, Date.now()),
+  );
   $: masteredTabItems = attachPartMasteryFlags(
     searchableTabItems,
     partMastery,

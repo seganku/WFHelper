@@ -18,13 +18,10 @@ import {
 import { formatWfmAssetUrl, sanitizeWfmSlug } from "../../config/shared/wfm.js";
 import { rendererPriceCacheKey } from "../../config/shared/wfmCacheKeys.js";
 import { isExcludedRankedMarketItem } from "../../config/shared/wfmExclusions.js";
+import { sanitizeDisplayName } from "../../config/shared/displayName.js";
 
 export type InventoryFilterTab = InventoryGroup | "resources" | "everything" | "pets";
 
-/**
- * Groups the Everything tab can draw from, in tab order. Resources come from a
- * separate parse and are appended by the view, not by buildBaseInventoryItems.
- */
 export const EVERYTHING_SOURCES: readonly InventoryFilterTab[] = [
   "all_parts",
   "relics",
@@ -36,7 +33,6 @@ export const EVERYTHING_SOURCES: readonly InventoryFilterTab[] = [
   "misc",
 ];
 
-/** Set rows aggregate parts already listed, so they stay opt-in. */
 export const EVERYTHING_DEFAULT_SOURCES: readonly InventoryFilterTab[] = EVERYTHING_SOURCES.filter(
   (source) => source !== "full_sets",
 );
@@ -66,7 +62,6 @@ export interface InventoryViewItem extends InventoryBaseItem {
   ducats: number | null;
   ducatonator: number | null;
   displayImageUrl: string | null;
-  /** Mod or arcane falling back to DE art because no WFM icon resolved. */
   usesFallbackArt: boolean;
   equippedSummary: string | null;
 }
@@ -106,7 +101,6 @@ export const INVENTORY_FILTERS: Array<{ key: InventoryFilterTab; labelKey: Messa
   { key: "relics", labelKey: "common.relics" },
   { key: "mods", labelKey: "inventory.tab.mods" },
   { key: "arcanes", labelKey: "inventory.tab.arcanes" },
-  // No incomplete_sets tab: those live on the Mastery page, plus a Full Sets toggle.
   { key: "full_sets", labelKey: "inventory.tab.fullSets" },
   { key: "equipment", labelKey: "inventory.tab.equipment" },
   { key: "pets", labelKey: "inventory.tab.pets" },
@@ -216,8 +210,6 @@ function itemGroupFallback(item: ParsedItem): InventoryFilterTab {
 
 function matchesFilterTab(item: ParsedItem, tab: InventoryFilterTab): boolean {
   const group = item.inventoryGroup || itemGroupFallback(item);
-  // Incomplete sets are the Full Sets tab's own toggle, never a category of
-  // their own, so Everything must not surface them.
   if (tab === "everything") return group !== "incomplete_sets";
   return group === tab;
 }
@@ -245,8 +237,8 @@ export function getLookupByName(
   return null;
 }
 
-/** Catalog record for a game uniqueName. null when the key is unknown or maps to
- *  a different gameRef, so a coincidental key collision never resolves. */
+/** null when the key is unknown or maps to a different gameRef, so a coincidental
+ *  key collision never resolves. */
 export function getLookupByGameRef(
   gameRef: string,
   lookup: WfmItemsLookup,
@@ -300,7 +292,6 @@ export function metricNeedsFromFilters(
   filters: SharedFiltersState,
   activeTab: InventoryFilterTab,
 ): MetricNeeds {
-  // Everything carries parts and ranked items at once, so it needs both.
   const needsDucatsForTab =
     activeTab === "all_parts" || activeTab === "full_sets" || activeTab === "everything";
   const needsOrdersForTab = isRankedGroup(activeTab) || activeTab === "everything";
@@ -311,10 +302,8 @@ export function metricNeedsFromFilters(
   };
 }
 
-/** Order ranks per key; RANKLESS_ORDER marks orders without a modRank. */
 type OrderRankLookup = Record<string, number[]>;
 
-/** Order subtypes per key; null marks orders without one. */
 type OrderSubtypeLookup = Record<string, (string | null)[]>;
 
 const RANKLESS_ORDER = -1;
@@ -326,8 +315,7 @@ export function buildOrderLookups(orders: WfmOrdersResult): {
 } {
   const orderedNames: OrderRankLookup = {};
   const orderedSlugs: OrderRankLookup = {};
-  // Name and slug keys cannot collide (slugs carry underscores), so subtype
-  // marks share one map keyed by both.
+  // Name and slug keys cannot collide (slugs carry underscores), so subtype marks share one map.
   const orderedSubtypes: OrderSubtypeLookup = {};
   const mark = (lookup: OrderRankLookup, key: string, modRank: unknown): void => {
     if (!key) return;
@@ -383,6 +371,10 @@ export function buildBaseInventoryItems(
           : rawRelicGroupName;
       const lookupByName = getLookupByName(relicGroupName || item.name, wfmLookup);
       const lookupByGameRef = getLookupByGameRef(item.internalName, wfmLookup);
+      const identityMetadata =
+        typeof lookupByGameRef?.gameRef === "string" && lookupByGameRef.gameRef.trim()
+          ? lookupByGameRef
+          : null;
       const mappedSlug = lookupByName?.url_name ? sanitizeWfmSlug(lookupByName.url_name) : null;
       const mappedGameRefSlug = lookupByGameRef?.url_name
         ? sanitizeWfmSlug(lookupByGameRef.url_name)
@@ -396,7 +388,10 @@ export function buildBaseInventoryItems(
             ...generatedSetSlugCandidates(item),
           ])
         : undefined;
-      const displayName = relicGroupName || item.name;
+      const catalogName = item.nameIsFallback
+        ? sanitizeDisplayName(identityMetadata?.item_name)
+        : "";
+      const displayName = relicGroupName || catalogName || item.name;
       const fallbackRelicSlug = group === "relics" ? toMarketSlug(displayName) : null;
       // WFM knows one relic item per group; the refinement is the order subtype.
       const relicQuality = relicLookupInfo?.quality ?? null;
@@ -447,7 +442,9 @@ export function buildBaseInventoryItems(
           cachedMeta?.icon ||
           null,
       );
-      const lookupMaxRank = toFinitePositiveInt(lookupByName?.maxRank);
+      const lookupMaxRank =
+        toFinitePositiveInt(identityMetadata?.maxRank) ??
+        toFinitePositiveInt(lookupByName?.maxRank);
       const resolvedMaxRank =
         isRankedListingItem && lookupMaxRank != null ? lookupMaxRank : item.maxRank;
       const rankCap =
@@ -466,9 +463,6 @@ export function buildBaseInventoryItems(
         ...(orderedSubtypes?.[normalizeMarketName(displayName)] ?? []),
         ...((marketSlug && orderedSubtypes?.[marketSlug]) || []),
       ];
-      // Rank-split rows only match orders for their own rank; a rank-less
-      // order (parts, sets) marks every row of the item. Refinement rows only
-      // match orders for their own subtype; a subtype-less order marks all.
       const orderPlaced =
         orderRanks.length > 0 &&
         (!isRankedListingItem ||
@@ -476,7 +470,7 @@ export function buildBaseInventoryItems(
         (relicQuality == null ||
           orderSubtypes.some((subtype) => subtype === null || subtype === relicQuality));
 
-      return {
+      const mapped: InventoryBaseItem = {
         ...item,
         name: visibleName,
         internalName:
@@ -499,12 +493,12 @@ export function buildBaseInventoryItems(
         marketThumb,
         subtype: relicQuality,
       };
+      if (catalogName) delete mapped.nameIsFallback;
+      return mapped;
     })
     .filter((item): item is InventoryBaseItem => item != null);
 }
 
-// Generic so callers that hang an extra field on the base item (market orders
-// carry sourceOrderId) get it back on the view item instead of re-joining.
 export function buildInventoryViewItems<T extends InventoryBaseItem>(
   baseItems: T[],
   metricsByKey: Record<string, ItemMetrics>,

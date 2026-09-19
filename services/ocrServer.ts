@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { withScope } from "./logger";
 import { resolveRuntimeResourcePath } from "./runtimeResources";
@@ -464,14 +467,17 @@ export const ocrServer = new OcrServerPool(OCR_SERVER_POOL_SIZE);
 // @napi-rs/system-ocr calls Windows Media.Ocr natively (no PowerShell pool
 // IPC); falls back to the pool when the native module fails to load.
 
-let _nativeRecognize:
-  | ((input: Buffer | string) => Promise<{ text: string; confidence: number }>)
-  | null = null;
+type NativeRecognize = (
+  input: string,
+  accuracy?: number | null,
+  preferredLangs?: string[] | null,
+  signal?: AbortSignal | null,
+) => Promise<{ text: string; confidence: number }>;
+
+let _nativeRecognize: NativeRecognize | null = null;
 
 try {
-  const mod = require("@napi-rs/system-ocr") as {
-    recognize: (input: Buffer | string) => Promise<{ text: string; confidence: number }>;
-  };
+  const mod = require("@napi-rs/system-ocr") as { recognize: NativeRecognize };
   _nativeRecognize = mod.recognize;
   log.info("[OcrServer] Native OCR engine loaded (@napi-rs/system-ocr)");
 } catch {
@@ -480,40 +486,138 @@ try {
 
 export const nativeOcrAvailable = !!_nativeRecognize;
 
-function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number | undefined,
-  label: string,
-): Promise<T> {
-  if (!timeoutMs || timeoutMs <= 0) return promise;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timeout after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
+const _nativeOcrInFlight = new Set<Promise<unknown>>();
+let _nativeOcrSeq = 0;
+
+/** The addon is pulled in with require(), which module mocking cannot reach. */
+export function setNativeRecognizeForTest(recognize: NativeRecognize | null): void {
+  _nativeRecognize = recognize;
 }
 
+async function runNativeOcr(
+  recognize: NativeRecognize,
+  input: string,
+  timeoutMs: number | undefined,
+  label: string,
+): Promise<string> {
+  if (typeof input !== "string") {
+    throw new TypeError(`${label}: native OCR takes a path, not a buffer`);
+  }
+  const controller = new AbortController();
+  const started = recognize(input, null, null, controller.signal);
+  _nativeOcrInFlight.add(started);
+  const settled = started.finally(() => _nativeOcrInFlight.delete(started));
+
+  if (!timeoutMs || timeoutMs <= 0) {
+    const result = await settled;
+    _nativeOcrOkAt = Date.now();
+    return result.text || "";
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([settled, expiry]);
+    _nativeOcrOkAt = Date.now();
+    return result.text || "";
+  } catch (err) {
+    await settled.catch(() => undefined);
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const _scratchFree: string[] = [];
+const _scratchAll = new Set<string>();
+
+const SCRATCH_PREFIX = "wfhelper-ocr-";
+let _scratchSwept = false;
+
+// A kill leaves the pid's scratch files behind, so reclaim earlier runs' once.
+// Windows refuses to unlink a file another live instance still holds open.
+function sweepStaleScratchFiles(): void {
+  if (_scratchSwept) return;
+  _scratchSwept = true;
+  const mine = `${SCRATCH_PREFIX}${process.pid}-`;
+  const dir = os.tmpdir();
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(SCRATCH_PREFIX) || !name.endsWith(".png")) continue;
+    if (name.startsWith(mine)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { force: true });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function acquireScratchPath(): string {
+  sweepStaleScratchFiles();
+  const reused = _scratchFree.pop();
+  if (reused) return reused;
+  const created = path.join(os.tmpdir(), `${SCRATCH_PREFIX}${process.pid}-${_nativeOcrSeq++}.png`);
+  _scratchAll.add(created);
+  return created;
+}
+
+function removeScratchFiles(): void {
+  for (const scratch of _scratchAll) {
+    try {
+      fs.rmSync(scratch, { force: true });
+    } catch {
+      // a scratch file the addon still holds open outlives the process instead
+    }
+  }
+  _scratchAll.clear();
+  _scratchFree.length = 0;
+}
+
+export async function drainNativeOcr(timeoutMs = 5000): Promise<void> {
+  try {
+    if (_nativeOcrInFlight.size === 0) return;
+    const pending = Promise.allSettled([..._nativeOcrInFlight]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    await Promise.race([
+      pending,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  } finally {
+    removeScratchFiles();
+  }
+}
+
+// The addon takes a napi reference for a Uint8Array and drops it inside its
+// libuv-worker task, so `napi_delete_reference` runs off the JS thread and
+// corrupts the reference list. The path overload holds no reference.
 export async function nativeOcrBuffer(imageBuffer: Buffer, timeoutMs?: number): Promise<string> {
   if (!_nativeRecognize) throw new Error("Native OCR not available");
-  const result = await withTimeout(_nativeRecognize(imageBuffer), timeoutMs, "nativeOcrBuffer");
-  _nativeOcrOkAt = Date.now();
-  return result.text || "";
+  const scratch = acquireScratchPath();
+  try {
+    await fs.promises.writeFile(scratch, imageBuffer);
+    return await runNativeOcr(_nativeRecognize, scratch, timeoutMs, "nativeOcrBuffer");
+  } finally {
+    _scratchAll.add(scratch);
+    _scratchFree.push(scratch);
+  }
 }
 
 export async function nativeOcrFile(imagePath: string, timeoutMs?: number): Promise<string> {
   if (!_nativeRecognize) throw new Error("Native OCR not available");
-  const result = await withTimeout(_nativeRecognize(imagePath), timeoutMs, "nativeOcrFile");
-  _nativeOcrOkAt = Date.now();
-  return result.text || "";
+  return await runNativeOcr(_nativeRecognize, imagePath, timeoutMs, "nativeOcrFile");
 }

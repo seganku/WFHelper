@@ -1,7 +1,7 @@
 <script lang="ts">
   import { showMasteredBadges, showOwnedParentBadges } from "../stores/preferences.js";
   import { itemLabel } from "../lib/itemLabel.js";
-  import { itemDb, wfmItems } from "../stores/data.js";
+  import { itemDb, wfmItems, foundryData } from "../stores/data.js";
   import { createPriceLoader } from "../lib/priceState.js";
   import {
     resolveComponentLocation,
@@ -47,7 +47,7 @@
   $: parentEntry = compDbEntry?.componentOf ? $itemDb[compDbEntry.componentOf] || null : null;
   $: parentLabel = parentEntry?.name === parentName ? itemLabel(parentEntry) : parentName;
 
-  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData);
+  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData, $foundryData);
   $: parentMarks = itemMarksFor(
     partMastery({
       name: comp?.name ?? "",
@@ -110,8 +110,14 @@
               >{/if}
           </div>{/if}
         {#if comp.tradable}<div class="detail-meta">{$tr("detail.tradable")}</div>{/if}
-        <div class="detail-meta">
-          {$tr("detail.owned", { owned: comp.ownedCount ?? 0, needed: comp.itemCount || 1 })}
+        <div
+          class="detail-meta"
+          title={comp.blueprintHeld ? $tr("common.blueprintOwnedNotBuilt") : undefined}
+        >
+          {$tr("detail.owned", {
+            owned: comp.built ?? comp.ownedCount ?? 0,
+            needed: comp.itemCount || 1,
+          })}
         </div>
       </div>
     </div>

@@ -4,7 +4,8 @@ vi.mock("../../services/wfmCatalog", () => ({
   lookupByName: vi.fn(),
 }));
 
-import { parseTradedItemName, lookupTradedCatalogItem } from "../../services/tradeItemName";
+import { parseTradedItemName } from "../../config/shared/tradeItemName";
+import { lookupTradedCatalogItem } from "../../services/tradeItemName";
 import * as wfmCatalog from "../../services/wfmCatalog";
 
 const mockLookupByName = vi.mocked(wfmCatalog.lookupByName);
@@ -27,6 +28,22 @@ describe("parseTradedItemName", () => {
     expect(parseTradedItemName("Arcane Energize (RANK 0)")).toEqual({
       baseName: "Arcane Energize",
       rank: 0,
+      riven: null,
+    });
+  });
+
+  it("reads the rank whatever case the dialog wrote it in", () => {
+    expect(parseTradedItemName("Magus Elevate (Rank 3)")).toEqual({
+      baseName: "Magus Elevate",
+      rank: 3,
+      riven: null,
+    });
+  });
+
+  it("reports no rank for a name that carries no suffix at all", () => {
+    expect(parseTradedItemName("Arcane Energize")).toEqual({
+      baseName: "Arcane Energize",
+      rank: null,
       riven: null,
     });
   });

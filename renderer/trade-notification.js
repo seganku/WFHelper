@@ -230,7 +230,10 @@
     if (lastRepResult) renderRepResult(lastRepResult);
   });
 
-  window.overlayTheme.bootstrapOverlayTheme(() => window.tradeNotificationApi.getThemeVars());
+  window.overlayTheme.bootstrapOverlayTheme(
+    () => window.tradeNotificationApi.getThemeVars(),
+    "tradeNotification",
+  );
   window.tradeNotificationApi.onThemeVars(window.overlayTheme.applyThemeVars);
   void window.overlayI18n
     .load(function () {

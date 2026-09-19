@@ -93,8 +93,6 @@ describe("parseMarketAlertRule", () => {
   });
 
   it("keeps only the first bound per attribute", () => {
-    // Duplicate attributes gave the alert card two chips with the same key,
-    // which Svelte 5 rejects at runtime.
     const result = parseMarketAlertRule(
       rivenRule({
         riven: {
@@ -212,6 +210,26 @@ describe("parseMarketAlertRule", () => {
     expect(overCap.error).toContain("too many entries");
   });
 
+  it("defaults noCooldown off and keeps the minutes behind it", () => {
+    const legacy = parseMarketAlertRule(rivenRule({ cooldownMinutes: 90 }), "id");
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) return;
+    expect(legacy.value.noCooldown).toBe(false);
+
+    const off = parseMarketAlertRule(rivenRule({ cooldownMinutes: 90, noCooldown: true }), "id");
+    expect(off.ok).toBe(true);
+    if (!off.ok) return;
+    expect(off.value.noCooldown).toBe(true);
+    expect(off.value.cooldownMinutes).toBe(90);
+  });
+
+  it("rejects a non-boolean noCooldown", () => {
+    const result = parseMarketAlertRule(rivenRule({ noCooldown: "yes" }), "id");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("noCooldown");
+  });
+
   it("bounds every numeric field", () => {
     expect(parseMarketAlertRule(rivenRule({ cooldownMinutes: 1 }), "id").ok).toBe(false);
     expect(parseMarketAlertRule(rivenRule({ cooldownMinutes: 100_000 }), "id").ok).toBe(false);
@@ -281,6 +299,19 @@ describe("export and import", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value[0].id).toBe("fresh-0");
+  });
+
+  it("carries noCooldown through an export round trip", () => {
+    const parsed = parseMarketAlertRule(rivenRule({ noCooldown: true }), "rule-1");
+    if (!parsed.ok) throw new Error(parsed.error);
+    const payload = JSON.parse(exportOf([parsed.value])) as {
+      rules: Array<Record<string, unknown>>;
+    };
+    expect(payload.rules[0].noCooldown).toBe(true);
+    const back = parseMarketAlertImport(exportOf([parsed.value]), (i) => `fresh-${i}`);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.value[0].noCooldown).toBe(true);
   });
 
   it("imports an export the shipped app produced before the key was renamed", () => {

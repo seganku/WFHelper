@@ -1,4 +1,6 @@
 (function () {
+  const ONE_LINE_MIN_SCALE = 0.75;
+
   window.installOverlayLayout = function installOverlayLayout(options) {
     const api = options.api || window.overlayLayoutApi;
     const root =
@@ -34,6 +36,7 @@
     const originalBackgrounds = new WeakMap();
     let state = null;
     let frame = 0;
+    let fitting = false;
     let gesture = null;
     const commands = [];
     let inFlight = null;
@@ -47,6 +50,29 @@
 
     function scheduleLayout() {
       if (!frame) frame = requestAnimationFrame(applyLayout);
+    }
+
+    function fitOneLine(elements) {
+      const fields = options.fitOneLineFields;
+      if (!fields?.length || fitting || gesture) return;
+      fitting = true;
+      try {
+        for (const element of elements) {
+          if (!fields.includes(element.dataset.rewardField)) continue;
+          element.style.removeProperty("--reward-fit-scale");
+          element.style.whiteSpace = "nowrap";
+          const natural = element.scrollWidth;
+          const available = element.clientWidth;
+          element.style.whiteSpace = "";
+          if (!available || !(natural > available)) continue;
+          // scrollWidth and clientWidth are whole pixels, so the fit gives back one.
+          const ratio = Math.floor(((available - 1) / natural) * 1000) / 1000;
+          if (ratio >= ONE_LINE_MIN_SCALE && ratio < 1)
+            element.style.setProperty("--reward-fit-scale", String(ratio));
+        }
+      } finally {
+        fitting = false;
+      }
     }
 
     function applyLayout() {
@@ -92,6 +118,7 @@
           }
         }
       }
+      fitOneLine(elements);
       const panel = logicalRect(root);
       const positions = [];
       const limits = new Map();
@@ -111,7 +138,6 @@
           bounds.left >= panel.right
         )
           continue;
-        // Scroll clipping does not change a repeated card's saved coordinate bounds.
         const left = bounds.left + 3;
         const top = bounds.top + 3;
         const right = bounds.right - 3;
@@ -152,7 +178,6 @@
         range.maxY = Math.min(range.maxY, position.bottom - position.height * position.scale);
       }
       for (const { element, field, style, scale } of positions) {
-        // A shared field offset must fit every visible repeated row.
         const range = limits.get(field);
         const x = Math.max(range.minX, Math.min(range.maxX, style.x));
         const y = Math.max(range.minY, Math.min(range.maxY, style.y));
@@ -198,7 +223,6 @@
         previous.previewVariant === next.previewVariant;
       if (!samePreview) pendingClamps.clear();
       else {
-        // Only an explicit geometry edit may save a clamp; preview changes stay visual.
         for (const [field, style] of Object.entries(next.layout.fields)) {
           const before = previous.layout.fields[field] || options.defaultFieldStyle;
           if (
@@ -281,6 +305,9 @@
         if (!target) return;
         event.preventDefault();
         event.stopPropagation();
+        // Preventing the default also blocks focus entering this iframe from a host input.
+        root.tabIndex = -1;
+        root.focus({ preventScroll: true });
         const field = target.dataset.rewardField;
         const style = state.layout.fields[field] || options.defaultFieldStyle;
         const offset = field
@@ -382,6 +409,32 @@
       window.flushRewardEditor = editor.flush;
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && editing()) editor.cancel();
+        if (!editing() || event.altKey || event.ctrlKey || event.metaKey || gesture) return;
+        if (
+          event.target instanceof Element &&
+          event.target.closest("input, textarea, select, [contenteditable]")
+        )
+          return;
+        const delta = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        }[event.key];
+        if (!delta) return;
+        event.preventDefault();
+        const field = state.selectedField;
+        const style = state.layout.fields[field] || options.defaultFieldStyle;
+        const step = event.shiftKey ? 10 : 1;
+        state.layout.fields[field] = {
+          ...style,
+          x: style.x + delta[0] * step,
+          y: style.y + delta[1] * step,
+        };
+        pendingClamps.add(field);
+        applyLayout();
+        const positioned = state.layout.fields[field];
+        send({ type: "field", field, patch: { x: positioned.x, y: positioned.y } });
       });
     }
     return editor;

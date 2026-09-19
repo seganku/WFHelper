@@ -14,7 +14,12 @@ const REFERENCE_ROOTS = ["src", "ipc", "config/shared"].map((dir) =>
 );
 
 // warframe.market whispers are sent to other players, so they must stay English.
-const ENGLISH_ONLY = ["common.whisperBuy", "common.whisperSell"];
+const ENGLISH_ONLY = [
+  "common.whisperBuy",
+  "common.whisperSell",
+  "common.whisperBuyBulk",
+  "common.whisperSellBulk",
+];
 
 // Trade shorthand, grade letters and relic tier names read the same everywhere,
 // so de.json leaves them out and the English fallback serves them.

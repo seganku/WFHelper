@@ -23,7 +23,7 @@
   }
 </script>
 
-<div class="appearance-section">
+<div class="appearance-section" data-app-scale>
   <h4 class="appearance-section-label">{$tr("common.appSize")}</h4>
 
   <ThemedControlCard as="label" density="tight">

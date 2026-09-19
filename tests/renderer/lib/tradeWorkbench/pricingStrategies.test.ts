@@ -15,6 +15,19 @@ function listing(platinum: number, overrides: Partial<PricingListing> = {}): Pri
   return { platinum, quantity: 1, status: "ingame", userName: `seller${platinum}`, ...overrides };
 }
 
+/** A WFM bulk listing: `platinum` buys `perTrade` items at once. */
+function bulkListing(
+  platinum: number,
+  perTrade: number,
+  overrides: Partial<PricingListing> = {},
+): PricingListing {
+  return {
+    ...listing(platinum, overrides),
+    unitPlatinum: Math.round((platinum / perTrade) * 100) / 100,
+    quantity: perTrade * 4,
+  };
+}
+
 function ctx(sell: PricingListing[], overrides: Partial<PricingContext> = {}): PricingContext {
   return { sellListings: sell, currentPrice: null, ...overrides };
 }
@@ -71,7 +84,6 @@ describe("workbench pricing strategies", () => {
   });
 
   it("bounded cheapest-average averages only listings inside the threshold", () => {
-    // min 100, 10% ceiling = 110: pool is 100/105/110, not 140.
     const result = suggestPrice(
       { id: "bounded-cheapest-average", count: 5, thresholdPercent: 10 },
       ctx([listing(100), listing(105), listing(110), listing(140)]),
@@ -79,7 +91,6 @@ describe("workbench pricing strategies", () => {
     expect(result.price).toBe(105);
     expect(result.inputs.average).toBe(105);
     expect(result.inputs.listingsConsidered).toBe(3);
-    // Confidence follows sample completeness: 3 of the requested 5.
     expect(result.confidence).toBe(0.6);
   });
 
@@ -131,6 +142,30 @@ describe("workbench pricing strategies", () => {
     expect(result.price).toBeNull();
   });
 
+  it("compares a bulk listing by its per-item price, not its listed price", () => {
+    const book = [bulkListing(97, 6, { userName: "bulk" }), listing(20, { userName: "single" })];
+
+    expect(suggestPrice({ id: "match-cheapest" }, ctx(book)).inputs.cheapest).toBe(16.17);
+    expect(suggestPrice({ id: "match-cheapest" }, ctx(book)).price).toBe(16);
+    expect(suggestPrice({ id: "cheapest-minus-one" }, ctx(book)).price).toBe(15);
+    expect(suggestPrice({ id: "percent-offset", percent: 10 }, ctx(book)).price).toBe(18);
+  });
+
+  it("keeps a dearer bulk listing out of the bounded average", () => {
+    const result = suggestPrice(
+      { id: "bounded-cheapest-average", count: 5, thresholdPercent: 10 },
+      ctx([listing(100), listing(110), bulkListing(240, 2, { userName: "bulk" })]),
+    );
+    expect(result.price).toBe(105);
+    expect(result.inputs.listingsConsidered).toBe(2);
+  });
+
+  it("prices our own bulk listing per trade, the way WFM takes it", () => {
+    const result = suggestPrice({ id: "match-cheapest" }, ctx([listing(20)], { ownPerTrade: 6 }));
+    expect(result.price).toBe(120);
+    expect(result.inputs.cheapest).toBe(20);
+  });
+
   it("returns null price with zero confidence on an empty book", () => {
     const result = suggestPrice({ id: "match-cheapest" }, ctx([]));
     expect(result.price).toBeNull();
@@ -156,7 +191,6 @@ describe("downward damping guard", () => {
   });
 
   it("holds the price when fewer than N listings undercut us", () => {
-    // Two below 50 with minListingsBelow 3: hold at 50.
     const result = suggestPrice(
       { id: "match-cheapest" },
       ctx([listing(45), listing(47), listing(55)], { currentPrice: 50 }),
@@ -168,7 +202,6 @@ describe("downward damping guard", () => {
   });
 
   it("follows the market at exactly N listings below and drop within bound", () => {
-    // Three below 50, drop 50 -> 46 = 4 <= allowed 5 (10% of 50, plat cap 8).
     const result = suggestPrice(
       { id: "match-cheapest" },
       ctx([listing(46), listing(47), listing(48)], { currentPrice: 50 }),
@@ -179,7 +212,6 @@ describe("downward damping guard", () => {
   });
 
   it("follows a drop exactly at the max-drop bound", () => {
-    // Allowed drop = min(floor(50*10%), 8) = 5; 50 -> 45 is exactly 5.
     const result = suggestPrice(
       { id: "match-cheapest" },
       ctx([listing(45), listing(46), listing(47)], { currentPrice: 50 }),

@@ -9,6 +9,7 @@ import { paddleRecognizerAvailable, recognizePaddleCrops } from "../../services/
 import type { CaptureResult } from "../../services/screenCapture";
 import { userDataPath } from "../../services/userDataPath";
 import { rivenContentRect } from "./rivenScanImage";
+import { loadSharp } from "../../services/sharpRuntime";
 
 const log = withScope("rivenScan");
 
@@ -75,7 +76,7 @@ export async function readWeaponLabelFromPanelPng(
   const scale = (REFERENCE_CONTENT_HEIGHT / Math.max(1, contentHeight)) * uiCorrection;
   const resize = scale < 0.98 || uiCorrection > 1.02 || (options.upscale !== false && scale > 1.02);
   if (resize || options.invert || options.clahe) {
-    const sharp = require("sharp") as (typeof import("sharp"))["default"];
+    const sharp = loadSharp();
     const meta = await sharp(png).metadata();
     const height = Math.max(1, Math.round((meta.height ?? 1) * scale));
     let pipeline = sharp(png);
@@ -148,7 +149,7 @@ async function recognizeCaptionBand(
   const height = Math.min(h - y, Math.round(rect.height));
   if (width < 24 || height < 10) return null;
 
-  const sharp = require("sharp") as (typeof import("sharp"))["default"];
+  const sharp = loadSharp();
   const band = wideCrop.crop({ x, y, width, height });
   const { data, info } = await sharp(band.toPNG())
     .resize(width * CAPTION_UPSCALE, height * CAPTION_UPSCALE, { kernel: "lanczos3" })

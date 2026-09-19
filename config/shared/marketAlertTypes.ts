@@ -1,11 +1,10 @@
-// Rule schema for the market alert engine. Split in two on purpose: the rule is the
-// shareable half an export carries; MarketAlertBinding (device-local) never leaves the machine.
+// The rule is the shareable half an export carries; MarketAlertBinding
+// (device-local) never leaves the machine.
 
 import { TAG_TO_WFM_URL_NAME } from "./wfmRivenVocabulary";
 
 export const MARKET_ALERT_SCHEMA_VERSION = 1;
 
-/** Rejected above this; an import is untrusted input, not a config file. */
 export const MARKET_ALERT_IMPORT_MAX_BYTES = 256 * 1024;
 export const MARKET_ALERT_MAX_RULES = 100;
 export const MARKET_ALERT_MAX_NAME_CHARS = 60;
@@ -51,12 +50,10 @@ export interface RivenStatBound {
 export interface RivenAlertMatch {
   /** WFM riven family slug, resolved from the catalog, never a display name. */
   weaponUrlName: string;
-  /** Buffs the roll should carry; minSimilarityPct relaxes how many. */
   requirePositive: string[];
   /** The only curses the roll may carry; a clean roll still passes, hasNegative decides that. */
   allowedNegatives?: string[];
   excludeNegatives?: string[];
-  /** Attributes that must not appear on either side. */
   excludeAttributes: string[];
   /** true = the roll must carry a curse, false = must not, absent = either. */
   hasNegative?: boolean;
@@ -77,21 +74,17 @@ export interface RivenAlertMatch {
   maxPlatinum?: number;
   minRerolls?: number;
   maxRerolls?: number;
-  /** Dissolve value per platinum asked; see rivenDissolveEndo. */
   minEndoPerPlat?: number;
 }
 
 export interface ItemAlertMatch {
   itemUrlName: string;
-  /** Which side of the order book to watch. */
   side: MarketOrderSide;
-  /** An order matches when its platinum lies inside the given bounds. */
   maxPlatinum?: number;
   minPlatinum?: number;
   minQuantity?: number;
   /** Only orders whose owner is in one of these; empty means any status. */
   statuses: MarketAlertSellerStatus[];
-  /** Owned-count gates, checked against the count the renderer last pushed. */
   ownedBelow?: number;
   ownedAbove?: number;
 }
@@ -109,19 +102,19 @@ export interface MarketAlertRule {
   name: string;
   kind: MarketAlertKind;
   enabled: boolean;
-  /** Minutes a rule stays quiet after it fires. */
   cooldownMinutes: number;
+  /** No quiet window at all; every new listing pings. cooldownMinutes is kept so
+   *  switching back restores the window the user had. */
+  noCooldown: boolean;
   riven?: RivenAlertMatch;
   item?: ItemAlertMatch;
   baro?: BaroAlertMatch;
 }
 
-/** A rule on its way into a save; the engine assigns the id when absent. */
 export type MarketAlertRuleInput = Omit<MarketAlertRule, "id"> & { id?: string };
 
 /** Device-local. Never exported, never shared, never part of a rule. */
 export interface MarketAlertBinding {
-  /** Desktop toast for this rule; source-level routing still applies on top. */
   native: boolean;
 }
 
@@ -139,17 +132,13 @@ export interface MarketAlertHit {
   /** English on purpose: a stored translated string freezes its language. */
   title: string;
   detail: string;
-  /** warframe.market deep link; the UI opens it through open-external. */
   url: string;
   platinum: number | null;
   seller?: string;
-  /** Presence at fire time, so the history can be read back by who was around;
-   *  hits saved before this field existed simply have none. */
   sellerStatus?: string;
   endoPerPlat?: number;
 }
 
-/** Mirror of the wfm scheduler health, reachable as EngineStatus["scheduler"]. */
 interface MarketAlertSchedulerHealth {
   state: "ok" | "backoff" | "degraded";
   recentFailures: number;
@@ -161,10 +150,8 @@ export interface MarketAlertEngineStatus {
   ruleCount: number;
   enabledCount: number;
   lastTickAt: string | null;
-  /** Requests the engine itself issued in the trailing hour. */
   requestsLastHour: number;
   scheduler: MarketAlertSchedulerHealth;
-  /** Last evaluation failure, already normalized; null once a tick succeeds. */
   lastError: string | null;
   /** Set when an unreadable rules file was quarantined and the engine started
    *  from an empty rule set, so the view can say the rules did not vanish. */
@@ -189,9 +176,7 @@ export type MarketAlertTestFireResult =
 export interface MarketAlertSavePayload {
   rule: MarketAlertRuleInput;
   binding?: MarketAlertBinding;
-  /** Display name for main to resolve into riven.weaponUrlName on save. */
   weaponName?: string;
-  /** Renderer-computed owned count for the rule's item slug. */
   ownedCount?: number | null;
 }
 
@@ -205,8 +190,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-// Unknown keys are rejected rather than dropped: a file we did not write is either
-// a different version or hand-edited, and both deserve a hard error, not silent reinterpretation.
+// Unknown keys are rejected rather than dropped: a file we did not write deserves
+// a hard error, not silent reinterpretation.
 function rejectUnknownKeys(
   raw: Record<string, unknown>,
   allowed: readonly string[],
@@ -312,8 +297,6 @@ function parseStatBounds(value: unknown): MarketAlertParseResult<RivenStatBound[
     if (min.value !== undefined && max.value !== undefined && min.value > max.value) {
       return fail("statBounds min is above max");
     }
-    // First bound per attribute wins, like readAttributeList: a second one is
-    // an editor slip, and the alert card keys its chips by attribute.
     if (out.some((existing) => existing.attribute === entry.attribute)) continue;
     const bound: RivenStatBound = { attribute: entry.attribute };
     if (min.value !== undefined) bound.min = min.value;
@@ -529,13 +512,12 @@ const RULE_KEYS = [
   "kind",
   "enabled",
   "cooldownMinutes",
+  "noCooldown",
   "riven",
   "item",
   "baro",
 ] as const;
 
-/** Validates one rule from untrusted input. `id` is optional on the way in so
- *  the same parser serves an import, an IPC save and a persisted file. */
 export function parseMarketAlertRule(
   value: unknown,
   fallbackId: string,
@@ -561,6 +543,9 @@ export function parseMarketAlertRule(
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
     return fail("rule enabled must be a boolean");
   }
+  if (value.noCooldown !== undefined && typeof value.noCooldown !== "boolean") {
+    return fail("rule noCooldown must be a boolean");
+  }
   const cooldown = readOptionalInt(
     value,
     "cooldownMinutes",
@@ -575,6 +560,7 @@ export function parseMarketAlertRule(
     kind,
     enabled: value.enabled !== false,
     cooldownMinutes: cooldown.value ?? MARKET_ALERT_DEFAULT_COOLDOWN_MINUTES,
+    noCooldown: value.noCooldown === true,
   };
 
   // Exactly the section its kind names, so a rule cannot carry a hidden second
@@ -627,6 +613,7 @@ export function buildMarketAlertExport(rules: readonly MarketAlertRule[]): Marke
         kind: rule.kind,
         enabled: rule.enabled,
         cooldownMinutes: rule.cooldownMinutes,
+        noCooldown: rule.noCooldown,
       };
       if (rule.riven) copy.riven = rule.riven;
       if (rule.item) copy.item = rule.item;
@@ -636,8 +623,7 @@ export function buildMarketAlertExport(rules: readonly MarketAlertRule[]): Marke
   };
 }
 
-/** Parses an export file. `text` is the raw file so the byte cap is applied
- *  before JSON.parse sees it. */
+/** `text` is the raw file so the byte cap is applied before JSON.parse sees it. */
 export function parseMarketAlertImport(
   text: unknown,
   makeId: (index: number) => string,

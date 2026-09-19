@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { test, expect } from "@playwright/test";
 
@@ -48,8 +49,6 @@ test("the riven alert editor offers stat layouts and clamps the rank fields", as
     const buffCountChip = page.locator('[data-alert-chip="positiveCount"]');
     await expect(buffCountChip).toHaveCount(1);
 
-    // The card carries a cooldown control separate from the enable toggle. A
-    // seeded rule has never fired, so there is nothing to clear.
     const clearCooldown = page.locator(`[data-alert-clear-cooldown="${SEED_RULE_ID}"]`);
     await expect(clearCooldown).toBeVisible();
     await expect(clearCooldown).toBeDisabled();
@@ -61,8 +60,6 @@ test("the riven alert editor offers stat layouts and clamps the rank fields", as
     await expect(page.locator('[data-testid="alert-rule-editor"]')).toBeVisible({
       timeout: 30_000,
     });
-    // The same control the card carries, so a muted rule reopened here can end
-    // its quiet time without going back to the list.
     const editorClearCooldown = page.locator("[data-alert-editor-clear-cooldown]");
     await editorClearCooldown.scrollIntoViewIfNeeded();
     await expect(editorClearCooldown).toBeVisible();
@@ -99,6 +96,61 @@ test("the riven alert editor offers stat layouts and clamps the rank fields", as
     await expect(mastery).toHaveValue("16");
 
     expect(rendererErrors).toEqual([]);
+  } finally {
+    await harness.app.close();
+    fs.rmSync(harness.sandboxDir, { recursive: true, force: true });
+  }
+});
+
+test("the card's no cooldown toggle persists and mutes the minutes field", async () => {
+  const harness = await launchElectronTestHarness("wfh-alert-no-cooldown-", {
+    userDataFiles: { "market-alert-rules.json": SEEDED_RULES },
+  });
+  const page = harness.page;
+
+  try {
+    await openView(page, "market");
+    await page.locator('#content [data-tour-tab="alerts"]').first().click();
+
+    const toggle = page.locator(`[data-alert-no-cooldown="${SEED_RULE_ID}"]`);
+    await expect(toggle).toHaveCount(1, { timeout: 30_000 });
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+
+    await expect(page.locator(`[data-alert-clear-cooldown="${SEED_RULE_ID}"]`)).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath("alert-no-cooldown-card.png") });
+
+    const saved = JSON.parse(
+      fs.readFileSync(
+        path.join(harness.sandboxDir, "user-data", "market-alert-rules.json"),
+        "utf8",
+      ),
+    ) as { rules: Array<{ id: string; noCooldown?: boolean; cooldownMinutes?: number }> };
+    const savedRule = saved.rules.find((rule) => rule.id === SEED_RULE_ID);
+    expect(savedRule?.noCooldown).toBe(true);
+    expect(savedRule?.cooldownMinutes).toBe(60);
+
+    await openView(page, "settings");
+    await openView(page, "market");
+    await page.locator('#content [data-tour-tab="alerts"]').first().click();
+    await expect(page.locator(`[data-alert-no-cooldown="${SEED_RULE_ID}"]`)).toBeChecked({
+      timeout: 30_000,
+    });
+
+    await page.locator(`[data-alert-edit="${SEED_RULE_ID}"]`).click();
+    const editor = page.locator('[data-testid="alert-rule-editor"]');
+    await expect(editor).toBeVisible({ timeout: 30_000 });
+    const editorToggle = editor.locator("[data-alert-no-cooldown-editor]");
+    await editorToggle.scrollIntoViewIfNeeded();
+    await expect(editorToggle).toBeChecked();
+
+    const minutes = editor.locator('input[type="number"][max="1440"]').first();
+    await expect(minutes).toBeDisabled();
+    await expect(editor.locator("[data-alert-editor-clear-cooldown]")).toBeDisabled();
+    await page.screenshot({ path: test.info().outputPath("alert-no-cooldown-editor.png") });
+
+    await editorToggle.uncheck();
+    await expect(minutes).toBeEnabled();
   } finally {
     await harness.app.close();
     fs.rmSync(harness.sandboxDir, { recursive: true, force: true });
@@ -148,7 +200,6 @@ const SEEDED_HITS = {
       sellerStatus: "offline",
     },
     {
-      // Recorded before hits carried a presence, so it can only show under All.
       id: "hit-legacy",
       ruleId: SEED_RULE_ID,
       ruleName: "Seeded Boar",
@@ -188,7 +239,6 @@ test("the hit history narrows by who was around, without changing the search", a
     await expect(filter).toBeVisible();
     expect(await selectOptionValues(filter)).toEqual(["all", "online", "ingame"]);
 
-    // Online covers in game too, the way an order book counts an active seller.
     await filter.selectOption("online");
     await expect(rows).toHaveCount(2);
     await filter.selectOption("ingame");
@@ -196,7 +246,6 @@ test("the hit history narrows by who was around, without changing the search", a
     await expect(rows.first()).toContainText("InGameSeller");
     await page.screenshot({ path: test.info().outputPath("alert-hit-filter.png") });
 
-    // The rule itself is untouched: this only narrows what is shown.
     await filter.selectOption("all");
     await expect(rows).toHaveCount(4);
   } finally {
@@ -223,7 +272,6 @@ test("a history with no recorded presence says so instead of claiming it is empt
     await page.locator("[data-alert-hit-seller-filter]").selectOption("online");
     await expect(rows).toHaveCount(0);
 
-    // "No hits recorded yet" would be a lie while the history holds one.
     const empty = page.locator("#content p", { hasText: /.+/ }).last();
     expect(await empty.innerText()).not.toContain("recorded yet");
     expect(await empty.innerText()).not.toContain("marketAlerts.");

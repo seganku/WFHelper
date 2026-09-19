@@ -772,7 +772,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     window.rivenOverlay.ready();
   };
-  window.overlayTheme.bootstrapOverlayTheme(() => window.rivenOverlay.getThemeVars());
+  window.overlayTheme.bootstrapOverlayTheme(
+    () => window.rivenOverlay.getThemeVars(),
+    _isLeft ? "rivenLeft" : "rivenRight",
+  );
 
   el("btn-close").addEventListener("click", () => window.rivenOverlay.close());
   el("btn-rescan").addEventListener("click", () => window.rivenOverlay.requestRescan());

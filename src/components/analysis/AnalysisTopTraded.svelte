@@ -180,7 +180,10 @@
                 }),
               })}
             </span>
-            <span class="text-right text-xs font-semibold tabular-nums text-text-primary">
+            <span
+              class="text-right text-xs font-semibold tabular-nums text-text-primary"
+              data-analysis-top-traded-value
+            >
               {formatPlat(row.value, $locale)}
             </span>
           {/each}
@@ -188,9 +191,11 @@
       {/snippet}
 
       <!-- Two ranked columns once the panel is wide enough, so the numbers stay
-           next to the names instead of drifting across a full-width row. -->
+           next to the names instead of drifting across a full-width row. The
+           right padding is the scrollbar's gutter: the bar paints over content. -->
       <div
-        class="grid max-h-[26rem] min-w-0 grid-cols-1 gap-x-6 overflow-y-auto min-[1500px]:grid-cols-2"
+        class="grid max-h-[26rem] min-w-0 grid-cols-1 gap-x-6 overflow-y-auto pr-3 min-[1500px]:grid-cols-2"
+        data-analysis-top-traded-scroll
       >
         {@render rankedColumn(leftRows, 0)}
         {#if rightRows.length > 0}

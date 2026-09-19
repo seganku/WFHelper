@@ -65,7 +65,9 @@ import {
   OVERLAY_FORWARDED_CSS_VARS,
   OVERLAY_FORWARDED_EFFECT_VARS,
   OVERLAY_FORWARDED_FONT_VARS,
+  OVERLAY_OPACITY_CSS_VARS,
 } from "../config/shared/themeCssVars";
+import { isOverlayOpacityPercent } from "../config/shared/overlayOpacity";
 
 const log = withScope("overlayIpc");
 
@@ -125,17 +127,12 @@ function toggleOverlayInteractionMode(source = "unknown"): void {
   );
   const anyRivenVisible = rivenOverlayIpc.isAnyRivenWindowVisible();
 
-  // Only consider a window "active" if it is currently (logically) visible.
   const anyActive = plannerVisible || rewardVisible || (anyRivenVisible && rivenLeftExists);
 
   if (!anyActive) {
-    // Nothing is visible - do nothing. This prevents the reward overlay from
-    // appearing unexpectedly when Ctrl+Tab is pressed after closing the planner.
     return;
   }
 
-  // A riven session close resets the riven flag but not the shared one, so
-  // independent toggles desync; the visible surface picks one value for both.
   const next = anyRivenVisible
     ? !rivenOverlayIpc.isRivenInteractiveMode()
     : !ctx.overlayInteractiveMode;
@@ -157,7 +154,6 @@ function toggleOverlayInteractionMode(source = "unknown"): void {
   setOverlayInteractionMode(next, source);
 }
 
-// Share the theme allowlist so renderer payloads and main validation cannot drift.
 const OVERLAY_THEME_VAR_ALLOWLIST: ReadonlySet<string> = new Set(OVERLAY_FORWARDED_CSS_VARS);
 const OVERLAY_COLOR_VAR_SET: ReadonlySet<string> = new Set(OVERLAY_FORWARDED_COLOR_VARS);
 const OVERLAY_FONT_VAR_SET: ReadonlySet<string> = new Set(OVERLAY_FORWARDED_FONT_VARS);
@@ -189,6 +185,9 @@ function isSafeOverlayFontValue(value: string): boolean {
 }
 
 function isSafeOverlayEffectValue(key: string, value: string): boolean {
+  if (key === "--overlay-opacity" || OVERLAY_OPACITY_CSS_VARS.includes(key)) {
+    return isOverlayOpacityPercent(value);
+  }
   if (key.startsWith("--radius-")) return boundedCssLength(value, 0, 3);
   if (key === "--ui-backdrop-blur") {
     return value === "none" || /^blur\((?:[1-9]|1\d|2[0-4])px\)$/.test(value);
@@ -240,8 +239,6 @@ function sanitizeOverlayThemeVars(raw: unknown): Record<string, string> {
   return sanitized;
 }
 
-// Theme and messages go to the same set of windows. Keeping one target list
-// stops a new overlay from being wired into one broadcast and not the other.
 function broadcastToOpenOverlays(channel: string, payload: unknown): void {
   rewardOverlayIpc.rewardWindowsController.sendOverlayEvent(channel, payload);
   rewardOverlayIpc.plannerWindowsController.sendOverlayEvent(channel, payload);
@@ -256,8 +253,6 @@ function pushOverlayThemeVars(): void {
   broadcastToOpenOverlays(OVERLAY_THEME_VARS, { ...ctx.overlayThemeVars });
 }
 
-// Reaches every overlay that is already open, so a language change lands
-// without waiting for the next trigger.
 function pushOverlayMessages(): void {
   broadcastToOpenOverlays(OVERLAY_MESSAGES, overlayMessages());
 }
@@ -348,7 +343,6 @@ function moveInteractiveOverlayWindow(sender: WebContents, rawDelta: unknown): v
   const win = BrowserWindow.fromWebContents(sender);
   if (!win || win.isDestroyed()) return;
 
-  // Arbi summary is always draggable (it has no passive click-through mode).
   const dragBlocked = isRivenOverlayWindow(win)
     ? !rivenOverlayIpc.isRivenInteractiveMode()
     : arbiOverlayIpc.isArbiSummaryWindow(win)
@@ -390,25 +384,36 @@ function register(): void {
     app.on("browser-window-created", (_event, win) => attachInteractionShortcut(win));
     BrowserWindow.getAllWindows().forEach(attachInteractionShortcut);
   }
-  const overlayEditor = registerOverlayEditor(settingsController.saveOverlaySettings, (kind) => {
-    if (kind === "reward")
-      rewardOverlayIpc.rewardWindowsController.positionOverlayWindow(
-        rewardOverlayIpc.rewardWindowsController.getAnchorMeta(),
-      );
-    else if (kind === "planner")
-      rewardOverlayIpc.plannerWindowsController.positionOverlayWindow(
-        rewardOverlayIpc.plannerWindowsController.getAnchorMeta(),
-      );
-    else if (kind === "arbiSummary") arbiOverlayIpc.positionArbiSummaryWindow();
-    else if (kind === "rivenLeft" || kind === "rivenRight")
-      rivenOverlayIpc.positionRivenOverlayWindows();
-  });
-  // Delegate domain-specific IPC to sub-modules
+  const overlayEditor = registerOverlayEditor(
+    settingsController.saveOverlaySettings,
+    (kind) => {
+      if (kind === "reward")
+        rewardOverlayIpc.rewardWindowsController.positionOverlayWindow(
+          rewardOverlayIpc.rewardWindowsController.getAnchorMeta(),
+        );
+      else if (kind === "planner")
+        rewardOverlayIpc.plannerWindowsController.positionOverlayWindow(
+          rewardOverlayIpc.plannerWindowsController.getAnchorMeta(),
+        );
+      else if (kind === "arbiSummary") arbiOverlayIpc.positionArbiSummaryWindow();
+      else if (kind === "rivenLeft" || kind === "rivenRight")
+        rivenOverlayIpc.positionRivenOverlayWindows();
+    },
+    (kind) => {
+      if (kind === "reward")
+        return rewardOverlayIpc.rewardWindowsController.getOverlayBoundsForActiveDisplay();
+      if (kind === "planner")
+        return rewardOverlayIpc.plannerWindowsController.getOverlayBoundsForActiveDisplay();
+      if (kind === "arbiSummary") return arbiOverlayIpc.getArbiSummaryPlacementRect();
+      if (kind === "rivenLeft") return rivenOverlayIpc.getRivenPlacementRects().left;
+      if (kind === "rivenRight") return rivenOverlayIpc.getRivenPlacementRects().right;
+      return null;
+    },
+  );
   rivenOverlayIpc.register();
   rewardOverlayIpc.register(pushOverlayInteractionMode, pushOverlayThemeVars);
   arbiOverlayIpc.register();
 
-  // Settings & theme IPC (shared across all overlays)
   handleAuthorized(OVERLAY_GET_SETTINGS, assertMainRendererSender, async () => {
     return { ...ctx.overlaySettings };
   });
@@ -443,8 +448,6 @@ function register(): void {
     OVERLAY_SET_SETTINGS,
     assertMainRendererSender,
     async (_event, nextSettings: unknown) => {
-      // Moving the global size slider resets per-overlay overrides - otherwise
-      // it would visibly do nothing once every window has its own scale.
       const incoming = asRecord(nextSettings);
       const importsLayouts =
         incoming && ("rewardLayout" in incoming || "overlayLayouts" in incoming);
@@ -503,7 +506,6 @@ function register(): void {
     if (isTrayActive()) createTray();
   });
 
-  // wizard dummies mirror real overlay positions on the primary display's work area
   handleAuthorized(OVERLAY_PLACEMENT_LAYOUT, assertMainRendererSender, async () => {
     const area = screen.getPrimaryDisplay().workArea;
     const rel = (rect: { x: number; y: number; width: number; height: number }) => ({
@@ -595,7 +597,6 @@ function register(): void {
       };
       settingsController.saveOverlaySettings();
 
-      // Live windows re-zoom on their next positioning pass; do it now.
       if (key === "reward") {
         rewardOverlayIpc.rewardWindowsController.positionOverlayWindow(
           rewardOverlayIpc.rewardWindowsController.getAnchorMeta(),

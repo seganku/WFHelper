@@ -24,8 +24,6 @@ import { round4, yieldToEventLoop } from "./rewardScannerUtils";
 
 const log = withScope("rewardScanner");
 
-// capture -> guards (console open, frame dedup) -> slot scan -> text fallback.
-
 export interface PreCaptureResult {
   image: NativeImage;
   sourceType: string | null;
@@ -108,7 +106,6 @@ function buildScanMeta({
   elapsedMs: number;
   hadOcrSuccess: boolean;
   layoutCount: number;
-  /** Slots of the winning card layout; the trigger loop's completeness check. */
   slotCount: number;
   /** Cards counted off the card bars, 0 when the frame had to be searched. */
   cardCount: number;
@@ -172,8 +169,6 @@ async function captureRewardScreen(
       log.warn("[RewardScanner] Could not capture screen");
       return { screenshot: null, captureMs };
     }
-    // Frame size and UI scale decide every crop ratio, so a bug report without
-    // them cannot be reproduced.
     const frame = screenshot.image?.getSize?.();
     log.info(
       "[RewardScanner] Scan capture source -> " +
@@ -191,8 +186,6 @@ async function captureRewardScreen(
 
 const FALLBACK_BAND = CROP_PRESETS.balanced[1] || CROP_PRESETS.balanced[0];
 
-// Fallback for when the slot scan finds nothing (single centred reward, odd
-// layout): OCR one band and match the whole strip.
 async function scanRewardFallbackText(
   screenshot: Screenshot,
   options: {
@@ -266,8 +259,6 @@ export async function runRewardScanPipeline({
   if (!screenshot) return null;
 
   const guardsStartedAt = Date.now();
-  // Never a reason to skip - the titles sit well above the console and the matcher
-  // rejects stray chat text. Kept so an empty scan can say why instead of blaming OCR.
   const consoleOpen = detectConsoleOpen(screenshot.image);
   if (consoleOpen) log.info("[RewardScanner] Chat console detected - scanning anyway");
 
@@ -289,8 +280,8 @@ export async function runRewardScanPipeline({
   }
 
   const guardsMs = Date.now() - guardsStartedAt;
+  log.info(`[RewardScanner] Guards done in ${guardsMs}ms - detecting slot layouts`);
 
-  // Primary path: per-slot OCR over detected reward layouts.
   const slotStats: SlotScanStats = {
     layoutCount: 0,
     cardCount: 0,
@@ -332,8 +323,6 @@ export async function runRewardScanPipeline({
         items.map((item) => item.name).join(" | "),
     );
   } else {
-    // The text fallback is a Windows-OCR band read; skip it when the caller
-    // pinned the onnx reader (harness isolation).
     const fallbackStartedAt = Date.now();
     const fallback =
       reader === "onnx"
@@ -364,9 +353,6 @@ export async function runRewardScanPipeline({
   }
 
   const frameSize = screenshot.image?.getSize?.() || { width: 0, height: 0 };
-  // The only per-attempt line, because one crack can spend 10 attempts: cards=
-  // carries the bar count so the slot scan does not log it a second time, and
-  // cards=0 means the counter missed and the layout search ran.
   log.info(
     `[RewardScanner] timing capture=${captureMs}ms guards=${guardsMs}ms ` +
       `layout=${slotStats.layoutMs}ms(${slotStats.layoutsTried}/${slotStats.layoutCount} tried, cards=${slotStats.cardCount}) ` +
@@ -392,9 +378,8 @@ export async function runRewardScanPipeline({
     }),
   };
 
-  // An empty result is not cached: the trigger loop counts empty attempts to
-  // decide it is not the reward screen, and instant cache hits would spend
-  // those attempts before the cards had a chance to render.
+  // An empty result is not cached: the trigger loop counts empty attempts to decide
+  // it is not the reward screen, and cache hits would spend them instantly.
   if (items.length > 0) cacheFrameResult(cacheKey, result);
   return result;
 }

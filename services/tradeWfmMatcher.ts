@@ -1,12 +1,11 @@
-/** Matches traded quantities to active WFM listings. */
-
 import { withScope } from "./logger";
 import * as wfmOrders from "./wfmOrders";
 import type { NormalisedOrder } from "./wfmOrders";
 import * as wfmSession from "./wfmSession";
 import * as wfmCatalog from "./wfmCatalog";
 import * as wfmContracts from "./wfmContracts";
-import { lookupTradedCatalogItem, parseTradedItemName } from "./tradeItemName";
+import { lookupTradedCatalogItem } from "./tradeItemName";
+import { parseTradedItemName } from "../config/shared/tradeItemName";
 import { normalizeForSearch, normalizeForSlug } from "../config/shared/textNormalize";
 import type { TradeType, TradeDirection } from "../config/shared/statsTypes";
 import type { TradeMatchPayload } from "../config/shared/tradeMatch";
@@ -41,6 +40,24 @@ function closeableQuantity(order: NormalisedOrder, tradedQuantity: number): numb
   const available = Math.min(tradedQuantity, order.quantity || 1);
   const perTrade = Math.max(1, order.perTrade ?? 1);
   return available % perTrade === 0 ? available : 0;
+}
+
+async function matchesTradeRank(order: NormalisedOrder, rank: number): Promise<boolean> {
+  if (order.modRank === rank) return true;
+  if (rank !== 0 || order.modRank !== null || !order.itemId || !order.itemUrlName) return false;
+
+  try {
+    // Rankless mods still log RANK 0.
+    const details = await wfmCatalog.lookupItemDetails(order.itemUrlName);
+    return (
+      details?.id === order.itemId &&
+      details.url_name === order.itemUrlName &&
+      details.hasRanks === false
+    );
+  } catch (err) {
+    log.warn("[Matcher] Could not verify the item's rank policy:", String(err));
+    return false;
+  }
 }
 
 function cleanupRecentlyClosed(): void {
@@ -132,7 +149,9 @@ export async function matchTradeToOrders(trade: ParsedTradeForMatching): Promise
     });
 
     if (prepared.parsed.rank != null) {
-      matching = matching.filter((order) => order.modRank === prepared.parsed.rank);
+      const rank = prepared.parsed.rank;
+      const rankMatches = await Promise.all(matching.map((order) => matchesTradeRank(order, rank)));
+      matching = matching.filter((_, index) => rankMatches[index]);
     }
     if (matching.length === 0) continue;
 

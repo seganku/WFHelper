@@ -20,8 +20,7 @@
   const WORLD_ARBI_SECTIONS = ["world.arbiSchedule"];
   const WORLD_DAILIES_SECTIONS = ["world.dailies"];
 
-  // Order is the default column split: the first half fills the wide left column,
-  // which is why Darvo sits after Invasions rather than where its markup lives.
+  // Order is the default column split: the first half fills the wide left column.
   registerSections("world", [
     { id: "world.weekOverview", view: "world", labelKey: "world.thisWeek", defaultSpan: "full" },
     {
@@ -161,7 +160,6 @@
   import { buildParsedItemFromDb } from "../lib/parsedItemFromDb.js";
   import { clockStore } from "../lib/timers.js";
 
-  // Stable reference so the vendor component is not re-fed a fresh array each tick.
   const VENDOR_KINDS = ["coda", "tenet"] as const;
 
   let collapsed: Record<string, boolean> = loadCollapsedSections();
@@ -205,8 +203,6 @@
     extraDrops?: import("../types/inventory.js").DropInfo[],
   ) {
     if (!uniqueName) return;
-    // Relic tiles (Varzia's aged relics included) get the reward breakdown
-    // modal, not the generic item card.
     const relicGroup = relicGroupForUniqueName($relicDb, uniqueName);
     if (relicGroup) {
       activeRelic.set(relicGroup);
@@ -279,8 +275,6 @@
     ? buildFullWeeks(CIRCUIT_HARD_ROTATION, circuitHardIdx, $itemDb, $inventoryData, $tr)
     : [];
 
-  // Recompute all countdowns from a single clock source.
-  // This keeps seconds moving while staying on the World tab.
   $: times = buildWorldTimes({
     baro,
     baroActive,
@@ -316,10 +310,8 @@
     t: $tr,
   });
 
-  // Invasions from raw DE world state (or warframestat fallback)
   $: invasions = ((wd?.invasions || []) as Invasion[]).filter((inv) => !inv.completed);
 
-  // Current bounty rotation (A/B/C) from oracle bounty-cycle
   $: bountyRotation = (wd?.bountyRotation as string | undefined) || undefined;
 
   // warframestat.us sometimes omits currentReward even when the wrapper exists.
@@ -342,10 +334,8 @@
 
   $: bountyTimers = buildBountyTimers(bounties, nowMs, nowCoarseMs);
 
-  // Baro relay location for countdown display
   $: baroLocation = typeof baro?.location === "string" && baro.location ? baro.location : null;
 
-  // Baro ownership set - covers mods, weapons, relics, cosmetics
   $: baroOwnedSet = buildBaroOwnedSet($inventoryData);
 
   function daysUntilLabel(iso: string | undefined, now: number, t: Translator): string {
@@ -360,8 +350,6 @@
     daysLabel: daysUntilLabel(reward.activation, nowCoarseMs, $tr),
   }));
 
-  // Most world blocks only exist when the world state carries them; an absent
-  // one must not reserve an empty grid slot.
   $: baroPresent = baroActive
     ? !!baro?.inventory && baro.inventory.length > 0
     : Boolean(baroAct) && !baroActive;
@@ -410,17 +398,22 @@
       <HeaderTabs options={worldTabOptions} activeKey={worldTab} onSelect={setWorldTab} />
       {#if worldTab === "world" && (baroActive || baroAct)}
         <div class="ml-auto flex items-center pb-2 shrink-0">
+          <!-- The separator lives in the expression: a template line break before it is trimmed away. -->
           {#if baroActive}
             <span
               class="rounded border border-warning/30 bg-warning/10 px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-warning"
-              >{$tr("world.baroLeavesIn", { baro: times.baro })}{#if baroLocation}
-                - {baroLocation}{/if}</span
+              data-world-baro-pill
+              >{$tr("world.baroLeavesIn", { baro: times.baro })}{baroLocation
+                ? ` - ${baroLocation}`
+                : ""}</span
             >
           {:else}
             <span
               class="rounded border border-warning/30 bg-warning/10 px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-warning"
-              >{$tr("world.baroArrivesIn", { baro: times.baro })}{#if baroLocation}
-                - {baroLocation}{/if}</span
+              data-world-baro-pill
+              >{$tr("world.baroArrivesIn", { baro: times.baro })}{baroLocation
+                ? ` - ${baroLocation}`
+                : ""}</span
             >
           {/if}
         </div>
@@ -708,7 +701,6 @@
           </div>
         {/if}
       {:else if sectionId === "world.darvo"}
-        <!-- DARVO'S DEAL -->
         {#if darvoDeals.length > 0}
           <div class="world-section">
             <CollapsibleSection
@@ -758,7 +750,6 @@
                       >
                     </span>
                     <span class="text-xs text-text-muted">
-                      <!-- No counts means no sales data; "0/0 sold" would read as a real figure. -->
                       {#if deal.sold != null && deal.total != null}{$tr("world.soldOfTotal", {
                           sold: deal.sold,
                           total: deal.total,
@@ -827,7 +818,6 @@
                       <strong class="text-text-primary"
                         >{f.missionType || $tr("common.mission")}</strong
                       >
-                      <!-- The chip only disambiguates mixed lists: Railjack and "all". -->
                       {#if f.isHard && (f.sourceMode === "railjack" || $worldFissureMode === "all")}
                         <span
                           class="ml-1.5 rounded-sm bg-warning/20 px-1 py-0.5 text-[0.625rem] font-bold uppercase tracking-[0.06em] text-warning"
@@ -878,8 +868,7 @@
                 >{$tr("world.inactive")}</span
               >
               <span class="text-sm font-display text-text-secondary ml-auto"
-                >{times.baro}{#if baroLocation}
-                  - {baroLocation}{/if}</span
+                >{times.baro}{baroLocation ? ` - ${baroLocation}` : ""}</span
               >
             </div>
           </div>
@@ -1063,9 +1052,7 @@
     padding: 0.85rem 0;
     border-top: 1px solid var(--border);
   }
-  /* Each section is its own grid cell, so "first" comes from the layout plan
-     rather than DOM position. Global because the marked element belongs to
-     LayoutSection; .world-layout keeps it to this view. */
+  /* Global because the marked element belongs to LayoutSection. */
   :global(.world-layout [data-layout-first-in-column="true"] > .world-section) {
     border-top: none;
   }
@@ -1127,32 +1114,6 @@
     background: color-mix(in srgb, var(--world-state-fear-text) 10%, transparent);
   }
 
-  .world-badge-lith {
-    background: color-mix(in srgb, var(--world-badge-lith-text) 12%, transparent);
-    color: var(--world-badge-lith-text);
-  }
-  .world-badge-meso {
-    background: color-mix(in srgb, var(--world-badge-meso-text) 18%, transparent);
-    color: var(--world-badge-meso-text);
-  }
-  .world-badge-neo {
-    background: color-mix(in srgb, var(--world-badge-neo-text) 12%, transparent);
-    color: var(--world-badge-neo-text);
-  }
-  .world-badge-axi {
-    background: color-mix(in srgb, var(--world-badge-axi-text) 12%, transparent);
-    color: var(--world-badge-axi-text);
-  }
-  .world-badge-requiem {
-    background: color-mix(in srgb, var(--world-badge-requiem-text) 14%, transparent);
-    color: var(--world-badge-requiem-text);
-  }
-  .world-badge-omnia {
-    background: color-mix(in srgb, var(--world-badge-omnia-text) 12%, transparent);
-    color: var(--world-badge-omnia-text);
-  }
-
-  /* Faction colors shared with child world components. */
   :global(.world-faction-grineer) {
     color: var(--world-faction-grineer);
   }
@@ -1172,8 +1133,7 @@
     background: var(--world-faction-infested);
   }
 
-  /* :global() because the class is applied via class: directive in child
-     CycleRow; !important wins over the sibling text-text-primary utility. */
+  /* :global() because the class is applied via class: directive in child CycleRow. */
   :global(.world-timer-urgent) {
     color: var(--world-timer-urgent-text) !important;
   }

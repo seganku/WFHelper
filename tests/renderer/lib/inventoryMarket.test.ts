@@ -13,6 +13,10 @@ import {
   type ItemMetrics,
 } from "../../../src/lib/inventoryMarket.js";
 import type { WfmOrder } from "../../../src/types/market.js";
+import type { WfmItemsLookup } from "../../../src/types/ipc.js";
+import type { ItemDbEntry } from "../../../src/types/inventory.js";
+import { parseInventory } from "../../../src/lib/inventory.js";
+import { gameRefKey } from "../../../src/lib/marketNaming.js";
 import type { RelicDatabase } from "../../../src/types/relics.js";
 import { setCachedPrice } from "../../../src/lib/wfm/priceCache.js";
 import {
@@ -78,6 +82,153 @@ function makeBaseItem(overrides: Partial<InventoryBaseItem> = {}): InventoryBase
 }
 
 describe("inventoryMarket view mapping", () => {
+  const nightwaveRef =
+    "/Lotus/Upgrades/Mods/Pistol/Event/Nightwave/NightwaveLasGooPistolAugmentMod";
+  const nightwaveCatalog: WfmItemsLookup = {
+    [gameRefKey(nightwaveRef)]: {
+      gameRef: nightwaveRef,
+      item_name: "Prototype Shock Coils",
+      url_name: "prototype_shock_coils",
+      maxRank: 5,
+    },
+  };
+
+  it("enriches an unknown inventory mod by gameRef without changing its ownership or key", () => {
+    const parsed = parseInventory(
+      { Upgrades: [{ ItemType: nightwaveRef, ItemCount: 1, Rank: 0 }] },
+      {},
+      new Set([gameRefKey(nightwaveRef)]),
+    );
+    const [mapped] = buildBaseInventoryItems(parsed, "mods", nightwaveCatalog, {}, {});
+    expect(mapped).toMatchObject({
+      name: "Prototype Shock Coils",
+      maxRank: 5,
+      rank: 0,
+      amount: 1,
+      marketSlug: "prototype_shock_coils",
+      inventoryKey: parsed[0].inventoryKey,
+      internalName: parsed[0].inventoryKey,
+    });
+    expect(parsed[0].name).toBe("Nightwave Las Goo Pistol Augment Mod");
+    expect(mapped.nameIsFallback).toBeUndefined();
+    expect(
+      buildBaseInventoryItems(
+        parseInventory({ Upgrades: [] }, {}, new Set([gameRefKey(nightwaveRef)])),
+        "mods",
+        nightwaveCatalog,
+        {},
+        {},
+      ),
+    ).toEqual([]);
+  });
+
+  it("repairs an item database fallback while retaining localized text and rank-split quantities", () => {
+    const db: Record<string, ItemDbEntry> = {
+      [nightwaveRef]: {
+        name: "Nightwave Las Goo Pistol Augment Mod",
+        nameIsFallback: true,
+        displayName: "Prototyp-Schockspulen",
+      },
+    };
+    const parsed = parseInventory(
+      {
+        Upgrades: [
+          { ItemType: nightwaveRef, ItemCount: 2, Rank: 0 },
+          { ItemType: nightwaveRef, ItemCount: 3, Rank: 5 },
+        ],
+      },
+      db,
+      new Set([gameRefKey(nightwaveRef)]),
+    );
+    const catalog: WfmItemsLookup = {
+      [gameRefKey(nightwaveRef)]: {
+        ...nightwaveCatalog[gameRefKey(nightwaveRef)],
+        gameRef: nightwaveRef.toLowerCase(),
+      },
+      "nightwave las goo pistol augment mod": {
+        url_name: "unrelated",
+        item_name: "Nightwave Las Goo Pistol Augment Mod",
+        maxRank: 10,
+      },
+    };
+    const mapped = buildBaseInventoryItems(parsed, "mods", catalog, {}, {});
+    expect(
+      mapped.map(({ name, displayName, rank, maxRank, amount }) => ({
+        name,
+        displayName,
+        rank,
+        maxRank,
+        amount,
+      })),
+    ).toEqual([
+      {
+        name: "Prototype Shock Coils",
+        displayName: "Prototyp-Schockspulen",
+        rank: 0,
+        maxRank: 5,
+        amount: 2,
+      },
+      {
+        name: "Prototype Shock Coils",
+        displayName: "Prototyp-Schockspulen",
+        rank: 5,
+        maxRank: 5,
+        amount: 3,
+      },
+    ]);
+    expect(mapped.map((item) => item.internalName)).toEqual(
+      parsed.map((item) => item.inventoryKey),
+    );
+  });
+
+  it("does not replace a generated name from a name-only market match", () => {
+    const parsed = parseInventory({ Upgrades: [{ ItemType: nightwaveRef }] }, {});
+    const [mapped] = buildBaseInventoryItems(
+      parsed,
+      "mods",
+      {
+        "nightwave las goo pistol augment mod": {
+          url_name: "unrelated",
+          item_name: "Nightwave Las Goo Pistol Augment Mod",
+        },
+      },
+      {},
+      {},
+    );
+    expect(mapped.name).toBe(parsed[0].name);
+    expect(mapped.nameIsFallback).toBe(true);
+  });
+
+  it.each(["Prototype Shock Coils", "Nightwave Las Goo Pistol Augment Mod"])(
+    "preserves the item database name %s and its localized display name",
+    (name) => {
+      const db: Record<string, ItemDbEntry> = {
+        [nightwaveRef]: { name, displayName: "Prototyp-Schockspulen", tradable: true },
+      };
+      const parsed = parseInventory({ Upgrades: [{ ItemType: nightwaveRef }] }, db);
+      const [mapped] = buildBaseInventoryItems(parsed, "mods", nightwaveCatalog, {}, {});
+      expect(mapped.name).toBe(name);
+      expect(mapped.displayName).toBe("Prototyp-Schockspulen");
+      expect(mapped.maxRank).toBe(5);
+    },
+  );
+
+  it.each([undefined, "/Lotus/Upgrades/Mods/Unrelated"])(
+    "does not rename a fallback from an unverified gameRef %s",
+    (gameRef) => {
+      const parsed = parseInventory({ Upgrades: [{ ItemType: nightwaveRef }] }, {});
+      const catalog: WfmItemsLookup = {
+        [gameRefKey(nightwaveRef)]: {
+          ...nightwaveCatalog[gameRefKey(nightwaveRef)],
+          ...(gameRef ? { gameRef } : { gameRef: null }),
+        },
+      };
+      const [mapped] = buildBaseInventoryItems(parsed, "mods", catalog, {}, {});
+      expect(mapped.name).toBe(parsed[0].name);
+      expect(mapped.maxRank).toBe(10);
+    },
+  );
+
   it("prefers market/thumb metadata for mods and arcanes", () => {
     const item = makeBaseItem();
     const metrics: Record<string, ItemMetrics> = {
@@ -742,6 +893,7 @@ describe("inventoryMarket view mapping", () => {
     );
 
     expect(mapped.marketSlug).toBe("primed_cleanse_corrupted");
+    expect(mapped.name).toBe("Primed Bane of Orokin");
   });
 
   it("uses cached snapshot meta thumbnails for ranked items before hydration", () => {

@@ -112,6 +112,26 @@ export function componentParentOf(
   return null;
 }
 
+/** Spellings a part's demand can be recorded under. DE's export gives a few part
+ *  blueprints a result type whose path shares no stem with them (Ambassador
+ *  Receiver Blueprint builds CrpArSniperReceiver), and only the recipe names the
+ *  product, so the stem aliases alone never reach those. */
+export function partDemandAliases(
+  uniqueName: string,
+  itemDb: Record<string, ItemDbEntry>,
+): string[] {
+  const aliases = componentUniqueNameAliases(uniqueName);
+  const resolved = new Set(aliases);
+  for (const alias of aliases) {
+    const product = itemDb[alias]?.buildsProduct;
+    if (product === undefined || resolved.has(product)) continue;
+    // Whole gear builds from a blueprint too; only a part shares a pile with one.
+    if (componentParentOf(product, itemDb) === null) continue;
+    for (const name of componentUniqueNameAliases(product)) resolved.add(name);
+  }
+  return [...resolved];
+}
+
 /** Consumers of one part across its alias spellings; a link counts once. */
 export function consumersOf(
   index: ReadonlyMap<string, readonly PartConsumer[]>,

@@ -92,7 +92,7 @@ describe("reward overlay edit sessions", () => {
       sessionId: null,
       selectedField: "platinumValue",
       previewCount: 4,
-      previewVariant: "rewards",
+      previewVariant: "mixed",
       scale: 1.1,
     });
     expect(saved.layout.fields.rarity?.hidden).toBe(true);
@@ -127,7 +127,7 @@ describe("reward overlay edit sessions", () => {
     expect(applySaved.mock.calls[0][0]).toMatchObject({
       sessionId: null,
       previewCount: 4,
-      previewVariant: "rewards",
+      previewVariant: "mixed",
     });
     expect(persist.mock.invocationCallOrder[0]).toBeLessThan(
       applySaved.mock.invocationCallOrder[0],

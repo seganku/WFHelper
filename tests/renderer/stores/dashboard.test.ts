@@ -14,6 +14,7 @@ import {
 
 const FISSURES = "widget.fissures";
 const VALUE = "widget.inventoryValue";
+const TIERS = ["lith", "meso", "neo", "axi", "requiem", "omnia"];
 
 function idsOf(layout: { widgets: { id: string }[] }): string[] {
   return layout.widgets.map((widget) => widget.id);
@@ -123,6 +124,40 @@ describe("normalizeDashboardLayout", () => {
     expect(settingNumber(widgetSettings(layout, FISSURES), "limit", 0)).toBe(5);
   });
 
+  it("shows every fissure tier for a layout stored before the tier filter existed", () => {
+    const layout = normalizeDashboardLayout({
+      version: 1,
+      widgets: [{ id: FISSURES, span: 1, hidden: false, settings: { limit: 3 } }],
+    });
+    const settings = widgetSettings(layout, FISSURES);
+    for (const tier of TIERS) expect(settingBoolean(settings, tier, false), tier).toBe(true);
+    expect(settingNumber(settings, "limit", 0)).toBe(3);
+  });
+
+  it("keeps a hidden tier hidden and leaves the other tiers shown", () => {
+    const layout = normalizeDashboardLayout({
+      version: 1,
+      widgets: [
+        { id: FISSURES, span: 1, hidden: false, settings: { limit: 5, lith: false, neo: false } },
+      ],
+    });
+    const settings = widgetSettings(layout, FISSURES);
+    expect(settingBoolean(settings, "lith", true)).toBe(false);
+    expect(settingBoolean(settings, "neo", true)).toBe(false);
+    expect(settingBoolean(settings, "meso", false)).toBe(true);
+    expect(settingBoolean(settings, "omnia", false)).toBe(true);
+  });
+
+  it("drops a tier toggle whose stored type is wrong", () => {
+    const layout = normalizeDashboardLayout({
+      version: 1,
+      widgets: [{ id: FISSURES, span: 1, hidden: false, settings: { omnia: "no", axi: 0 } }],
+    });
+    const settings = widgetSettings(layout, FISSURES);
+    expect(settingBoolean(settings, "omnia", false)).toBe(true);
+    expect(settingBoolean(settings, "axi", false)).toBe(true);
+  });
+
   it("falls back to the default span when the stored one is not allowed", () => {
     const layout = normalizeDashboardLayout({
       version: 1,
@@ -149,6 +184,16 @@ describe("setWidgetSetting", () => {
   it("clamps on the way in", () => {
     setWidgetSetting(FISSURES, "limit", 500);
     expect(settingNumber(widgetSettings(get(dashboardLayout), FISSURES), "limit", 0)).toBe(20);
+  });
+
+  it("hides one fissure tier without touching the others", () => {
+    setWidgetSetting(FISSURES, "omnia", false);
+    const settings = widgetSettings(get(dashboardLayout), FISSURES);
+    expect(settingBoolean(settings, "omnia", true)).toBe(false);
+    for (const tier of TIERS.filter((name) => name !== "omnia")) {
+      expect(settingBoolean(settings, tier, false), tier).toBe(true);
+    }
+    setWidgetSetting(FISSURES, "omnia", true);
   });
 
   it("ignores an unknown widget, an unknown setting and a wrong type", () => {

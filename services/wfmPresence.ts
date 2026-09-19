@@ -173,16 +173,15 @@ function _refreshIdleAway(): boolean {
   if (away === _idleAway) return false;
   _idleAway = away;
   _awayArmed = true;
+  log.info(`[WFMPresence] Idle ${_idleSeconds}s - away rule ${away ? "armed" : "released"}`);
   return true;
 }
 
-/** Auto In Game outranks the away rules on purpose: being AFK inside the game
- * is the game's business, and the account already advertises "In Game" there. */
 function _wantedOverride(): PresenceOverride {
+  if (_awayArmed && _awayIdleEnabled && _idleAway) return "away";
   if (_gameOpen && _autoEnabled) return "auto";
   if (!_awayArmed) return null;
-  if (_awayClosedEnabled && !_gameOpen) return "away";
-  return _awayIdleEnabled && _idleAway ? "away" : null;
+  return _awayClosedEnabled && !_gameOpen ? "away" : null;
 }
 
 /** Re-run the auto/away rules against the current game, idle and option state.
@@ -199,8 +198,7 @@ async function _applyOverride(): Promise<void> {
     if (!previous) _preOverrideStatus = _status === "ingame" ? null : _status;
     _override = "auto";
     log.info("[WFMPresence] Warframe running - setting status to ingame");
-    if (await _push("ingame", true)) writeOverride();
-    else _override = previous;
+    _settlePush(await _push("ingame", true), previous);
     return;
   }
 
@@ -210,8 +208,7 @@ async function _applyOverride(): Promise<void> {
     if (!previous) _preOverrideStatus = _status;
     _override = "away";
     log.info("[WFMPresence] Away - setting status to invisible");
-    if (!(await _push("invisible"))) _override = previous;
-    else writeOverride();
+    _settlePush(await _push("invisible"), previous);
     return;
   }
 
@@ -219,33 +216,38 @@ async function _applyOverride(): Promise<void> {
   const restore = _preOverrideStatus ?? "invisible";
   _override = null;
   log.info(`[WFMPresence] ${previous} status ended - restoring status to ${restore}`);
-  // A failed restore keeps the override and schedules its own retry: the game
-  // and idle polls only call in on an edge, so nothing else would try again.
-  if (!(await _push(restore))) {
+  const restored = await _push(restore);
+  if (restored) _preOverrideStatus = null;
+  _settlePush(restored, previous);
+}
+
+/** A failed push keeps the old override and retries on its own: the game and
+ *  idle polls only call in on an edge, so nothing else would try again. */
+function _settlePush(pushed: boolean, previous: PresenceOverride): void {
+  if (!pushed) {
     _override = previous;
-    _scheduleRestoreRetry();
+    _schedulePushRetry();
     return;
   }
-  _clearRestoreRetry();
-  _preOverrideStatus = null;
+  _clearPushRetry();
   writeOverride();
 }
 
-const RESTORE_RETRY_MS = 60_000;
-let _restoreRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const PUSH_RETRY_MS = 60_000;
+let _pushRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-function _clearRestoreRetry(): void {
-  if (_restoreRetryTimer) clearTimeout(_restoreRetryTimer);
-  _restoreRetryTimer = null;
+function _clearPushRetry(): void {
+  if (_pushRetryTimer) clearTimeout(_pushRetryTimer);
+  _pushRetryTimer = null;
 }
 
-function _scheduleRestoreRetry(): void {
-  _clearRestoreRetry();
-  _restoreRetryTimer = setTimeout(() => {
-    _restoreRetryTimer = null;
+function _schedulePushRetry(): void {
+  _clearPushRetry();
+  _pushRetryTimer = setTimeout(() => {
+    _pushRetryTimer = null;
     void _applyOverride();
-  }, RESTORE_RETRY_MS);
-  const timerRef = _restoreRetryTimer as { unref?: () => void };
+  }, PUSH_RETRY_MS);
+  const timerRef = _pushRetryTimer as { unref?: () => void };
   if (typeof timerRef.unref === "function") timerRef.unref();
 }
 
@@ -374,7 +376,7 @@ export function needsIdlePolling(): boolean {
 
 export function reset(): void {
   _clearHold();
-  _clearRestoreRetry();
+  _clearPushRetry();
   _status = null;
   _override = null;
   _preOverrideStatus = null;

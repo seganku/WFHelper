@@ -1,4 +1,5 @@
 import { installOverlayLayoutBridge } from "./ipc/overlayLayoutPreload";
+import type { RewardPresentation } from "./config/shared/rewardPresentation";
 import { contextBridge, ipcRenderer } from "electron";
 import { onIpc } from "./ipc/preloadListeners";
 import { installOverlayContentVisibility } from "./ipc/overlayContentVisibility";
@@ -12,6 +13,8 @@ import {
   RELIC_REWARD_TRIGGER,
   RELIC_PLANNER_TRIGGER,
   RELIC_REWARD_ITEMS,
+  RELIC_REWARD_CONTENT_HEIGHT,
+  RELIC_REWARD_PRESENTATION,
   RELIC_RECOMMENDATIONS,
   OVERLAY_THEME_VARS,
   OVERLAY_INTERACTION_MODE,
@@ -33,6 +36,9 @@ contextBridge.exposeInMainWorld("overlay", {
   getDragHint: () => ipcRenderer.invoke(OVERLAY_GET_DRAG_HINT),
   moveBy: (dx: number, dy: number) => ipcRenderer.send(OVERLAY_DRAG_MOVE, { dx, dy }),
   ready: () => ipcRenderer.send(OVERLAY_READY),
+  reportContentHeight: (height: number) => ipcRenderer.send(RELIC_REWARD_CONTENT_HEIGHT, height),
+  reportPresentation: (presentation: RewardPresentation) =>
+    ipcRenderer.send(RELIC_REWARD_PRESENTATION, presentation),
   onTrigger: (cb: () => void) => onOverlayIpc(RELIC_REWARD_TRIGGER, () => cb()),
   onPlannerTrigger: (cb: (payload: unknown) => void) =>
     onOverlayIpc(RELIC_PLANNER_TRIGGER, (_event: unknown, payload: unknown) => cb(payload)),

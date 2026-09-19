@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   orderInventoryMatch,
   ownedCountForMarketOrder,
+  planQuantitySync,
 } from "../../../src/lib/marketOrderInventory.js";
 import { applySharedFiltersAndSort } from "../../../src/lib/filters.js";
 import type { SharedFiltersState } from "../../../src/types/filters.js";
@@ -101,7 +102,6 @@ describe("ownedCountForMarketOrder", () => {
   });
 
   it("survives an inventory row whose name is not a string", () => {
-    // Seen live: one leaked non-string name crashed every market join.
     const inventory = [parsedItem({ name: 117 as unknown as string }), parsedItem({})];
     expect(ownedCountForMarketOrder(order({}), inventory)).toBe(3);
   });
@@ -133,6 +133,45 @@ function catalog(gameRef: string, urlName = "trinity_prime_chassis"): WfmItemsLo
 
 function mod(name: string, rank: number): ParsedItem {
   return parsedItem({ name, rank, amount: 1, inventoryGroup: "mods" });
+}
+
+const FRAME_PART_BLUEPRINT = "/Lotus/Types/Recipes/WarframeRecipes/AtlasPrimeSystemsBlueprint";
+const FRAME_PART_COMPONENT = "/Lotus/Types/Recipes/WarframeRecipes/AtlasPrimeSystemsComponent";
+
+function framePartOrder(overrides: Partial<WfmOrder> = {}): WfmOrder {
+  return order({
+    itemName: "Atlas Prime Systems",
+    itemUrlName: "atlas_prime_systems",
+    ...overrides,
+  });
+}
+
+const framePartCatalog = (): WfmItemsLookup => catalog(FRAME_PART_BLUEPRINT, "atlas_prime_systems");
+
+const craftedPart = (amount: number): ParsedItem =>
+  parsedItem({
+    name: "Atlas Prime Systems",
+    internalName: FRAME_PART_COMPONENT,
+    tradable: false,
+    amount,
+  });
+
+const tradableBlueprint = (amount: number): ParsedItem =>
+  parsedItem({
+    name: "Atlas Prime Systems Blueprint",
+    internalName: FRAME_PART_BLUEPRINT,
+    tradable: true,
+    amount,
+  });
+
+function atragraphOrder(overrides: Partial<WfmOrder> = {}): WfmOrder {
+  return order({
+    itemName: "Spectral Serration",
+    itemUrlName: "spectral_serration",
+    subtype: "atragraph",
+    modRank: 0,
+    ...overrides,
+  });
 }
 
 describe("orderInventoryMatch", () => {
@@ -179,8 +218,6 @@ describe("orderInventoryMatch", () => {
   const RELIC_REF = "/Lotus/Types/Game/Projections/T4VoidProjectionEBronze";
   const relicCatalog = (): WfmItemsLookup => catalog(RELIC_REF, "axi_a1_relic");
 
-  // Production shape: the item DB names every refinement identically, so the
-  // quality only exists in the projection uniqueName's metal suffix.
   const relicRow = (metal: "Bronze" | "Silver" | "Gold" | "Platinum", amount: number): ParsedItem =>
     parsedItem({
       name: "Axi A1 Relic",
@@ -193,8 +230,6 @@ describe("orderInventoryMatch", () => {
     expect(orderInventoryMatch(relicOrder("radiant"), radiantOwned, relicCatalog(), {})).toEqual({
       state: "match",
     });
-    // An intact stack cannot fulfil a radiant order, even though both rows
-    // carry the identical display name.
     const intactOwned = [relicRow("Bronze", 4)];
     expect(orderInventoryMatch(relicOrder("radiant"), intactOwned, relicCatalog(), {})).toEqual({
       state: "missing",
@@ -230,6 +265,36 @@ describe("orderInventoryMatch", () => {
     expect(orderInventoryMatch(relicOrder(null), radiantOwned, relicCatalog(), {})).toEqual({
       state: "match",
     });
+  });
+
+  it("backs a frame part listing with the blueprint alone, not the crafted part", () => {
+    const inventory = [craftedPart(3), tradableBlueprint(1)];
+    expect(
+      orderInventoryMatch(framePartOrder({ quantity: 3 }), inventory, framePartCatalog(), {}),
+    ).toEqual({ state: "partial", owned: 1, listed: 3 });
+  });
+
+  it("has no opinion on a mod variant the inventory cannot tell apart", () => {
+    const inventory = [
+      parsedItem({ name: "Spectral Serration", amount: 4, inventoryGroup: "mods" }),
+    ];
+    expect(
+      orderInventoryMatch(atragraphOrder({ quantity: 9 }), inventory, catalog(PART_REF), {}),
+    ).toEqual({ state: "match" });
+  });
+
+  it("still backs a regular mod listing from the inventory", () => {
+    const inventory = [
+      parsedItem({ name: "Spectral Serration", amount: 1, inventoryGroup: "mods" }),
+    ];
+    expect(
+      orderInventoryMatch(
+        atragraphOrder({ subtype: "regular", quantity: 4 }),
+        inventory,
+        catalog(PART_REF),
+        {},
+      ),
+    ).toEqual({ state: "partial", owned: 1, listed: 4 });
   });
 
   it("flags a listing the inventory only partly backs", () => {
@@ -278,6 +343,205 @@ describe("orderInventoryMatch", () => {
     const inventory = [parsedItem({ inventoryGroup: "all_parts", rank: 0 })];
     expect(orderInventoryMatch(listing, inventory, catalog(PART_REF), {})).toEqual({
       state: "match",
+    });
+  });
+});
+
+function arcane(rank: number, amount: number): ParsedItem {
+  return parsedItem({ name: "Arcane Energize", rank, amount, inventoryGroup: "arcanes" });
+}
+
+function arcaneOrder(overrides: Partial<WfmOrder>): WfmOrder {
+  return order({
+    itemName: "Arcane Energize",
+    itemUrlName: "arcane_energize",
+    ...overrides,
+  });
+}
+
+describe("planQuantitySync", () => {
+  it("moves a listing to the owned count", () => {
+    const listing = order({ quantity: 1 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [{ order: listing, quantity: 3 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("counts a listing already at the owned count as unchanged", () => {
+    const listing = order({ quantity: 3 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [],
+      unchanged: 1,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("never zeroes a listing the inventory cannot prove", () => {
+    const listing = order({ itemName: "Ash Prime Systems", quantity: 4 });
+    expect(planQuantitySync([listing], [])).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 1,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("leaves buy orders out of the plan entirely", () => {
+    const listing = order({ orderType: "buy", quantity: 1 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("counts only the copies at the listed rank for a ranked arcane", () => {
+    const listing = arcaneOrder({ modRank: 3, quantity: 1 });
+    expect(planQuantitySync([listing], [arcane(0, 7), arcane(3, 4)])).toEqual({
+      updates: [{ order: listing, quantity: 4 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("treats a rank nothing sits at as unbacked rather than zero", () => {
+    const listing = arcaneOrder({ modRank: 5, quantity: 2 });
+    expect(planQuantitySync([listing], [arcane(0, 7)])).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 1,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("skips a bulk listing the owned count would drop below its own perTrade", () => {
+    const listing = order({ quantity: 12, perTrade: 6 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 1,
+    });
+  });
+
+  it("still lowers a bulk listing to a quantity its perTrade allows", () => {
+    const listing = order({ quantity: 12, perTrade: 3 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [{ order: listing, quantity: 3 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("ignores a perTrade above the listed quantity, as warframe.market clamps it", () => {
+    const listing = order({ quantity: 2, perTrade: 9 });
+    expect(planQuantitySync([listing], [parsedItem({ amount: 3 })])).toEqual({
+      updates: [{ order: listing, quantity: 3 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("never plans a quantity under the listing's perTrade", () => {
+    const listings = [
+      order({ id: "a".repeat(24), quantity: 12, perTrade: 6 }),
+      order({ id: "b".repeat(24), quantity: 12, perTrade: 2 }),
+    ];
+    const plan = planQuantitySync(listings, [parsedItem({ amount: 3 })]);
+    for (const update of plan.updates) {
+      expect(update.quantity).toBeGreaterThanOrEqual(update.order.perTrade ?? 1);
+    }
+    expect(plan.updates).toHaveLength(1);
+    expect(plan.belowPerTrade).toBe(1);
+  });
+
+  it("sums the rows that back one unranked listing", () => {
+    const listing = order({ quantity: 2 });
+    const inventory = [parsedItem({ amount: 3 }), parsedItem({ amount: 1 })];
+    expect(planQuantitySync([listing], inventory)).toEqual({
+      updates: [{ order: listing, quantity: 4 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("still counts the only row it has when the catalog files it elsewhere", () => {
+    const listing = framePartOrder({ quantity: 1 });
+    const inventory = [craftedPart(4)];
+    expect(planQuantitySync([listing], inventory, framePartCatalog())).toEqual({
+      updates: [{ order: listing, quantity: 4 }],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("sends the tradable blueprint count, not the crafted parts beside it", () => {
+    const listing = framePartOrder({ quantity: 1 });
+    const inventory = [craftedPart(3), tradableBlueprint(1)];
+    expect(planQuantitySync([listing], inventory, framePartCatalog())).toEqual({
+      updates: [],
+      unchanged: 1,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("leaves an Atragraph listing alone rather than counting ordinary copies", () => {
+    const listing = atragraphOrder({ quantity: 1 });
+    const inventory = [
+      parsedItem({ name: "Spectral Serration", amount: 4, inventoryGroup: "mods" }),
+    ];
+    expect(planQuantitySync([listing], inventory)).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 0,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("keeps a listing the inventory cannot model out of the no-copies count", () => {
+    const atragraph = atragraphOrder({ id: "4".repeat(24), quantity: 1 });
+    const missing = order({
+      id: "5".repeat(24),
+      itemName: "Ash Prime Systems",
+      itemUrlName: "ash_prime_systems",
+      quantity: 2,
+    });
+    const inventory = [
+      parsedItem({ name: "Spectral Serration", amount: 4, inventoryGroup: "mods" }),
+    ];
+    expect(planQuantitySync([atragraph, missing], inventory)).toEqual({
+      updates: [],
+      unchanged: 0,
+      unbacked: 1,
+      belowPerTrade: 0,
+    });
+  });
+
+  it("reports each bucket across a mixed selection", () => {
+    const grow = order({ id: "1".repeat(24), quantity: 1 });
+    const steady = arcaneOrder({ id: "2".repeat(24), modRank: 3, quantity: 4 });
+    const unknown = order({
+      id: "3".repeat(24),
+      itemName: "Ash Prime Systems",
+      itemUrlName: "ash_prime_systems",
+    });
+    const inventory = [parsedItem({ amount: 3 }), arcane(3, 4)];
+    expect(planQuantitySync([grow, steady, unknown], inventory)).toEqual({
+      updates: [{ order: grow, quantity: 3 }],
+      unchanged: 1,
+      unbacked: 1,
+      belowPerTrade: 0,
     });
   });
 });

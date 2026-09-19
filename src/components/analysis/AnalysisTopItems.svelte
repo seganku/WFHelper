@@ -3,7 +3,7 @@
   import ThemedPanel from "../ThemedPanel.svelte";
   import { locale, tr } from "../../lib/i18n.js";
   import type { MessageKey } from "../../lib/i18n.js";
-  import { formatPlat, type ItemRollup } from "../../lib/stats/tradeAnalytics.js";
+  import { formatPlat, itemKeyBase, type ItemRollup } from "../../lib/stats/tradeAnalytics.js";
   import type { AnalyticsItemLink } from "../../lib/stats/analyticsItemLink.js";
 
   interface Props {
@@ -38,6 +38,14 @@
             {#if row.secondary}
               <span class="truncate text-[0.65rem] text-text-muted">{row.secondary}</span>
             {/if}
+            {#if row.rank != null}
+              <span
+                class="shrink-0 text-[0.65rem] text-text-muted"
+                data-analysis-item-rank={row.rank}
+              >
+                {$tr("browse.rankValue", { value: row.rank })}
+              </span>
+            {/if}
           </span>
           <span class="shrink-0 font-semibold tabular-nums text-text-primary">
             {formatPlat(row.platinum, $locale)}
@@ -62,8 +70,8 @@
 
       <ol class="m-0 flex list-none flex-col gap-1.5 p-0">
         {#each rows as row (row.key)}
-          {@const link = itemLink.resolve(row.key, row.name)}
-          <li class="min-w-0">
+          {@const link = itemLink.resolve(itemKeyBase(row.key), row.name)}
+          <li class="min-w-0" data-analysis-item-row={row.key}>
             {#if link}
               <button
                 type="button"

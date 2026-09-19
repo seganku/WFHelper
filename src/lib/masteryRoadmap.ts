@@ -1,6 +1,8 @@
 import { componentUniqueNameAliases } from "../../config/shared/componentNames.js";
 import { getLookupByName } from "./inventoryMarket.js";
-import type { ComponentInfo, ParsedItem } from "../types/inventory.js";
+import { isReservablePart } from "./inventory/partConsumers.js";
+import type { PartState } from "./craftingTree.js";
+import type { ComponentInfo, ItemDbEntry, ParsedItem } from "../types/inventory.js";
 import type { FoundryState } from "../types/filters.js";
 import type { WfmItemsLookup } from "../types/ipc.js";
 import type { OwnedCounts, RelicDatabase, RelicQuality, RelicReward } from "../types/relics.js";
@@ -12,6 +14,7 @@ type MasteryRoadmapAccess =
   | "building"
   | "buildable"
   | "foundryParts"
+  | "craftParts"
   | "marketBlueprint";
 
 interface MissingMasteryComponent {
@@ -70,13 +73,32 @@ export function componentMarketSlug(
   return null;
 }
 
+function requiredComponentUnits(component: ComponentInfo): number {
+  return Math.max(1, component.itemCount ?? 1);
+}
+
+function ownedComponentUnits(component: ComponentInfo): number {
+  return component.owned === true
+    ? requiredComponentUnits(component)
+    : Math.max(0, component.ownedCount ?? 0);
+}
+
+export function isComponentHeld(component: ComponentInfo): boolean {
+  return ownedComponentUnits(component) >= requiredComponentUnits(component);
+}
+
+// A set counts a held part blueprint as the part (one pile, two spellings).
+export function componentPartState(component: ComponentInfo): PartState {
+  if (!isComponentHeld(component)) return "missing";
+  return component.blueprintHeld === true ? "blueprint" : "owned";
+}
+
 function missingMasteryComponents(components: ComponentInfo[]): MissingMasteryComponent[] {
   return components
     .map((component) => {
-      const required = Math.max(1, component.itemCount ?? 1);
-      const owned = component.owned ? required : Math.max(0, component.ownedCount ?? 0);
       const foundry = component.building ? 1 : 0;
-      return { component, count: Math.max(0, required - owned - foundry) };
+      const count = requiredComponentUnits(component) - ownedComponentUnits(component) - foundry;
+      return { component, count: Math.max(0, count) };
     })
     .filter((entry) => entry.count > 0);
 }
@@ -117,10 +139,56 @@ const ACCESS_PRIORITY: Record<MasteryRoadmapAccess, number> = {
   building: 3,
   buildable: 4,
   foundryParts: 5,
+  craftParts: 6,
   // A Market blueprint is one credit purchase away, but the parts it needs are
   // still missing, so it ranks below everything the foundry can already finish.
-  marketBlueprint: 6,
+  marketBlueprint: 7,
 };
+
+export function masteryBuildReadiness(
+  components: ComponentInfo[],
+): "buildable" | "craftParts" | null {
+  if (components.length === 0) return null;
+  const states = components.map(componentPartState);
+  if (states.some((state) => state === "missing")) return null;
+  return states.some((state) => state === "blueprint") ? "craftParts" : "buildable";
+}
+
+/** The recipe rows that count as parts. Raw materials are farmed rather than
+ *  crafted, so a weapon built straight from resources has no parts to tally. */
+export function masteryPartRows<T extends { uniqueName?: string }>(
+  rows: readonly T[],
+  itemDb: Record<string, ItemDbEntry>,
+): T[] {
+  return rows.filter(
+    (row) => row.uniqueName != null && isReservablePart(row.uniqueName, itemDb[row.uniqueName]),
+  );
+}
+
+/** Rows you could put in the foundry right now. The total still counts every
+ *  recipe row, because being short a resource is just as blocking, but a raw
+ *  material is farmed rather than crafted so it never reads as craftable. */
+export function masteryCraftableCount<T extends { uniqueName?: string }>(
+  rows: readonly T[],
+  stateOf: (row: T) => PartState,
+  itemDb: Record<string, ItemDbEntry>,
+): number {
+  return masteryPartRows(rows, itemDb).filter((row) => stateOf(row) === "blueprint").length;
+}
+
+export function masteryPartCounts(states: readonly PartState[]): {
+  total: number;
+  built: number;
+  craftable: number;
+} {
+  let built = 0;
+  let craftable = 0;
+  for (const state of states) {
+    if (state === "blueprint") craftable += 1;
+    else if (state === "owned") built += 1;
+  }
+  return { total: states.length, built, craftable };
+}
 
 // Parts in the foundry are neither owned nor missing, so relics and platinum
 // read the set as complete. A foundry copy covers only one required unit.
@@ -145,8 +213,10 @@ function easyAccess(item: MasteryRoadmapSourceItem): MasteryRoadmapAccess | null
   if (item.owned || item.currentlyOwned) return "owned";
   if (item.foundryState === "claimable") return "claimable";
   if (item.foundryState === "building") return "building";
-  if (item.foundryState === "buildable") return "buildable";
+  const readiness = masteryBuildReadiness(item.components);
+  if (item.foundryState === "buildable" && readiness !== "craftParts") return "buildable";
   if (partsWaitingInFoundry(item)) return "foundryParts";
+  if (readiness === "craftParts") return "craftParts";
   if (marketBlueprintFinishesIt(item)) return "marketBlueprint";
   return null;
 }

@@ -1,9 +1,7 @@
-/* The relic grid sizes itself: rem-based auto-fill columns track the root
-   font scale, so px-blind viewport steps here would fight larger fonts. */
 @media (max-width: 800px) {
   :root {
     --content-gutter: 1rem;
-    --sidebar-width: 3.75rem;
+    --sidebar-width: 4rem;
     --relic-grid-gap: 0.52rem;
     --relic-card-icon-size: 2.35rem;
     --relic-card-min-height: 4.35rem;

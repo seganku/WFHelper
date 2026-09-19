@@ -12,16 +12,19 @@ import {
 } from "../../config/shared/overlayLayout";
 import { OVERLAY_EDIT_STATE } from "../../config/shared/ipcChannels";
 import { asRecord } from "../../config/shared/objectValidation";
+import type { RewardPresentation } from "../../config/shared/rewardPresentation";
 
 export function createOverlayEditor(options: {
   ctx: typeof context;
   persist: () => boolean;
   applySaved: (state: OverlayEditState) => void;
+  getLastReward?: () => RewardPresentation | null;
 }) {
   const { ctx } = options;
   let session: {
     owner: WebContents;
     state: OverlayEditState;
+    reward: RewardPresentation | null;
   } | null = null;
   let revision = 0;
   let selectedKind: OverlayLayoutKind = "reward";
@@ -111,6 +114,7 @@ export function createOverlayEditor(options: {
     session = {
       owner,
       state: { ...initial, sessionId: randomUUID() },
+      reward: kind === "reward" ? structuredClone(options.getLastReward?.() ?? null) : null,
     };
     owner.on("destroyed", cancel);
     owner.on("render-process-gone", cancel);
@@ -168,12 +172,16 @@ export function createOverlayEditor(options: {
           ) ||
           typeof command.count !== "number" ||
           typeof command.variant !== "string" ||
-          !getOverlayDescriptor(draft.kind).variants.some(
-            (variant) => variant.value === command.variant,
-          )
+          (!(command.variant === "last" && current.reward) &&
+            !getOverlayDescriptor(draft.kind).variants.some(
+              (variant) => variant.value === command.variant,
+            ))
         )
           throw new Error("Invalid preview");
-        draft.previewCount = command.count as OverlayEditState["previewCount"];
+        draft.previewCount =
+          command.variant === "last" && current.reward
+            ? current.reward.count
+            : (command.count as OverlayEditState["previewCount"]);
         draft.previewVariant = command.variant as OverlayEditState["previewVariant"];
         break;
       case "scale":
@@ -193,6 +201,8 @@ export function createOverlayEditor(options: {
     update,
     state,
     savedState,
+    previewReward: () =>
+      structuredClone(session?.reward ?? (session ? null : (options.getLastReward?.() ?? null))),
     end: (token: unknown, save: unknown, owner?: WebContents) => {
       requireSession(token, owner);
       if (typeof save !== "boolean") throw new Error("Invalid save flag");

@@ -233,14 +233,53 @@ test("Windows edge resizing changes only the dragged dimension and preserves tex
           };
         };
       };
+      const settledBounds = async (): Promise<Rectangle> => {
+        const deadline = Date.now() + 10_000;
+        let previous = win.getBounds();
+        for (;;) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const now = win.getBounds();
+          if (
+            (now.x === previous.x &&
+              now.y === previous.y &&
+              now.width === previous.width &&
+              now.height === previous.height) ||
+            Date.now() > deadline
+          )
+            return now;
+          previous = now;
+        }
+      };
       win.setPosition(400, 200);
-      // Let the initial move settle before entering Windows' modal resize loop.
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await settledBounds();
       const before = win.getBounds();
       const zoom = win.webContents.getZoomFactor();
       const beforeImage = (await win.webContents.capturePage()).toPNG().toString("base64");
       const handle = win.getNativeWindowHandle().readBigUInt64LE();
       const memory = koffi.alloc(Rect, 1);
+      const probe = koffi.alloc(Rect, 1);
+      type Rect4 = { left: number; top: number; right: number; bottom: number };
+      // SetWindowPos from a thread that does not own the window returns before the
+      // owning thread applies the rect, so GetWindowRect still reports the old one.
+      const waitForRect = async (target: Rect4): Promise<void> => {
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          getRect(handle, probe);
+          const now = koffi.decode(probe, Rect) as Rect4;
+          if (
+            Math.abs(now.left - target.left) <= 1 &&
+            Math.abs(now.top - target.top) <= 1 &&
+            Math.abs(now.right - target.right) <= 1 &&
+            Math.abs(now.bottom - target.bottom) <= 1
+          )
+            return;
+          if (Date.now() > deadline)
+            throw new Error(
+              `window rect never reached ${JSON.stringify(target)}, it is ${JSON.stringify(now)}`,
+            );
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      };
       const message = (code: number, edge = 0, rect: unknown = null) =>
         new Promise<void>((resolve, reject) => {
           // Send from a worker so the window handler can make its own FFI calls.
@@ -270,16 +309,11 @@ test("Windows edge resizing changes only the dragged dimension and preserves tex
           await message(0x231); // WM_ENTERSIZEMOVE
           for (let tick = 0; tick < 3; tick++) {
             getRect(handle, memory);
-            const rect = koffi.decode(memory, Rect) as {
-              left: number;
-              top: number;
-              right: number;
-              bottom: number;
-            };
+            const rect = koffi.decode(memory, Rect) as Rect4;
             rect[edge] -= Math.round(10 * dpi);
             koffi.encode(memory, Rect, rect);
             await message(0x214, edge === "left" ? 1 : 3, memory); // WM_SIZING
-            const applied = koffi.decode(memory, Rect) as typeof rect;
+            const applied = koffi.decode(memory, Rect) as Rect4;
             // Windows applies the returned outer RECT after WM_SIZING finishes.
             await new Promise<void>((resolve, reject) => {
               setPosition.async(
@@ -293,9 +327,9 @@ test("Windows edge resizing changes only the dragged dimension and preserves tex
                 (error: Error | null) => (error ? reject(error) : resolve()),
               );
             });
+            await waitForRect(applied);
           }
-          await new Promise((resolve) => setTimeout(resolve, 600));
-          const held = win.getBounds();
+          const held = await settledBounds();
           riven.positionRivenOverlayWindows();
           snapshots.push({
             edge,
@@ -308,6 +342,7 @@ test("Windows edge resizing changes only the dragged dimension and preserves tex
         }
       } finally {
         koffi.free(memory);
+        koffi.free(probe);
       }
       const released = win.getBounds();
       const saved = ctx.default.overlaySettings.overlayWindowBounds?.rivenLeft;

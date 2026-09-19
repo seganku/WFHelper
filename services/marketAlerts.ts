@@ -1,6 +1,3 @@
-/** Market alert engine: one evaluation loop over the saved rules, main-process only.
- *  WFM traffic rides wfmClient at background priority; hits dedup via a persisted seen file. */
-
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 
@@ -51,28 +48,18 @@ const log = withScope("marketAlerts");
 const TICK_MS = 60_000;
 const INITIAL_DELAY_MS = 30_000;
 const RULE_EVAL_INTERVAL_MS = 3 * 60_000;
-/** Engine-issued WFM requests per tick, on top of the global scheduler budget. */
 const MAX_REQUESTS_PER_TICK = 4;
-/** Per-rule backoff after a failed evaluation, doubling to the ceiling. */
 const FAILURE_BASE_MS = 5 * 60_000;
 const FAILURE_CEILING_MS = 60 * 60_000;
-/** Seen entries older than this are pruned; a relisted auction may re-fire. */
 const SEEN_TTL_MS = 7 * 24 * 60 * 60_000;
 const SEEN_MAX_PER_RULE = 500;
 const RULES_FILE = "market-alert-rules.json";
-/** Riven attribute values scale linearly with mod rank; WFM serves them at the
- *  listing's rank, so a bound has to be compared at rank 8. */
 const RIVEN_MAX_MOD_RANK = 8;
 
 interface MarketAlertEngineDeps {
-  /** The caller's native toast path; history recording lives inside it. */
   deliverNative: (title: string, body: string) => void;
-  /** Signed-in WFM name, for excluding the user's own listings. */
   getOwnName: () => string | null;
-  /** Owned count for a WFM item slug from the inventory main holds right now;
-   *  null when there is none, which falls back to the save-time snapshot. */
   getLiveOwnedCount: (itemUrlName: string) => Promise<number | null>;
-  /** Tells the renderer a hit landed or the engine status moved. */
   onChanged: () => void;
 }
 
@@ -194,19 +181,15 @@ let _stopped = false;
 let _ticking = false;
 let _lastTickAt: string | null = null;
 let _lastError: string | null = null;
-/** The rule the status line's error belongs to. Without it a failed rule that
- *  is deleted or switched off leaves an error nothing can ever clear. */
 let _lastErrorRuleId: string | null = null;
 let _requestTimes: number[] = [];
 let _rulesRecoveredAt: string | null = null;
 
-/** Per-rule runtime pacing; never persisted, so a restart re-evaluates soon. */
 const _cooldownUntil = new Map<string, number>();
 const _nextEvalAt = new Map<string, number>();
 const _failureCount = new Map<string, number>();
 
-/** A rules file the reviver rejected is kept, not overwritten: the next save
- *  would destroy it, and it is the only copy of the user's rules. */
+/** A rules file the reviver rejected is kept, not overwritten: it is the only copy. */
 function quarantineUnreadableRules(): void {
   const file = userDataPath(RULES_FILE);
   let raw: string;
@@ -276,15 +259,12 @@ async function wfmGet(path: string): Promise<unknown> {
   return wfmClient.request("GET", path, { priority: "background" });
 }
 
-// Item order books only exist on v2 now: v1 /items/{slug}/orders answers 403
-// "Deprecated", which made every item rule back off forever.
+// Item order books only exist on v2 now: v1 /items/{slug}/orders answers 403 "Deprecated".
 async function wfmGetV2(path: string): Promise<unknown> {
   noteRequest();
   return wfmClient.requestV2("GET", path, { priority: "background" });
 }
 
-// Raw auction fields the engine reads, parsed here instead of widening the shared
-// WfmRawAuction type: an unexpected shape must degrade to a skipped auction, not a thrown tick.
 interface AuctionView {
   id: string;
   seller: string;
@@ -349,7 +329,7 @@ function parseAuctionViews(raw: unknown): AuctionView[] {
 function buildRivenSearchPath(match: RivenAlertMatch): string {
   let path = `/auctions/search?type=riven&weapon_url_name=${encodeURIComponent(match.weaponUrlName)}`;
   // WFM's stat keys AND server-side and ignore `similarity`, so only an all-required
-  // rule may push positives; only a one-entry curse list is safe since two would AND.
+  // rule may push positives, and only a one-entry curse list is safe.
   const pushPositive = (match.minSimilarityPct ?? 100) >= 100;
   const allowed = match.allowedNegatives ?? [];
   const pushNegative = match.hasNegative === true && allowed.length === 1 ? allowed : [];
@@ -368,16 +348,14 @@ function inBounds(value: number, min?: number, max?: number): boolean {
   return true;
 }
 
-/** The attribute value a listing would show at mod rank 8. WFM serves the value
- *  at the listing's own rank and riven stats scale with (rank + 1). */
+/** WFM serves an attribute at the listing's own rank, and riven stats scale with (rank + 1). */
 function valueAtMaxRank(value: number, modRank: number): number {
   const rank = Math.min(RIVEN_MAX_MOD_RANK, Math.max(0, Math.trunc(modRank)));
   const scaled = (value * (RIVEN_MAX_MOD_RANK + 1)) / (rank + 1);
   return Math.round(scaled * 10) / 10;
 }
 
-/** Every gate, locally, on exact url_name equality. Substring matching is the
- *  documented failure mode: critical_chance must never claim the slide slug. */
+/** Exact url_name equality only: critical_chance must never claim the slide slug. */
 function matchRivenAuction(match: RivenAlertMatch, auction: AuctionView): boolean {
   if (auction.bidOnly && match.includeBidOnly !== true) return false;
   const positives = new Set(auction.attributes.filter((a) => a.positive).map((a) => a.urlName));
@@ -403,7 +381,6 @@ function matchRivenAuction(match: RivenAlertMatch, auction: AuctionView): boolea
   if (match.hasNegative === false && negatives.size > 0) return false;
   if (match.positiveCount !== undefined && positives.size !== match.positiveCount) return false;
 
-  // A roll that does not carry the bounded stat cannot satisfy the bound.
   for (const bound of match.statBounds) {
     const attr = auction.attributes.find((a) => a.urlName === bound.attribute);
     if (!attr) return false;
@@ -479,8 +456,7 @@ interface OrderView {
   quantity: number;
 }
 
-// Reads both envelopes: v2 `{ data: [...] }` is what the engine fetches; v1 field
-// names stay accepted for fixtures and for a future endpoint swap.
+// Reads both envelopes: v2 `{ data: [...] }` plus v1 field names, for fixtures.
 function parseOrderViews(raw: unknown): OrderView[] {
   const orders = extractWfmOrderList(raw);
   if (!orders) return [];
@@ -490,7 +466,7 @@ function parseOrderViews(raw: unknown): OrderView[] {
     if (entry.visible === false) continue;
     const user = isRecord(entry.user) ? entry.user : {};
     // v2 requests carry Crossplay: true, so the answer includes console/mobile sellers;
-    // only crossplay-on ones can trade with PC. An unlabelled row is kept, never silenced.
+    // only crossplay-on ones can trade with PC.
     const platform = parseOrderPlatform(entry);
     if (platform !== null && platform !== "pc" && user.crossplay !== true) continue;
     const side = parseOrderType(entry);
@@ -518,8 +494,6 @@ function matchItemOrder(
   }
   if (!inBounds(order.platinum, match.minPlatinum, match.maxPlatinum)) return false;
   if (match.minQuantity !== undefined && order.quantity < match.minQuantity) return false;
-  // Owned gates fail open when no count was ever pushed: alerts must keep
-  // working on a machine with no inventory source configured.
   if (ownedCount !== null) {
     if (match.ownedBelow !== undefined && ownedCount >= match.ownedBelow) return false;
     if (match.ownedAbove !== undefined && ownedCount <= match.ownedAbove) return false;
@@ -565,8 +539,7 @@ function isOwnListing(name: string): boolean {
   return !!own && !!name && own.toLowerCase() === name.toLowerCase();
 }
 
-/** Dedup key includes the price so a real price drop on the same listing may
- *  fire again while an unchanged listing never does. */
+/** The price is in the key so a real price drop on the same listing may fire again. */
 function seenKey(id: string, platinum: number): string {
   return `${id}:${platinum}`;
 }
@@ -599,8 +572,6 @@ function markSeen(ruleId: string, keys: string[]): void {
   persistSeen();
 }
 
-/** Live count from the inventory main already holds. A throw or a slug the
- *  catalog cannot resolve reads as "no live count", not as zero owned. */
 async function liveOwnedCount(itemUrlName: string): Promise<number | null> {
   const read = _deps?.getLiveOwnedCount;
   if (!read) return null;
@@ -614,7 +585,6 @@ async function liveOwnedCount(itemUrlName: string): Promise<number | null> {
 
 interface EvalOutcome {
   hits: MarketAlertHit[];
-  /** Dedup keys, aligned with hits, so the caller can mark exactly what fired. */
   keys: string[];
   candidates: number;
 }
@@ -652,7 +622,6 @@ async function evaluateRule(rule: MarketAlertRule, skipDedup: boolean): Promise<
       candidates: orders.length,
     };
   }
-  // Baro rules are schema-only; they never evaluate.
   return { hits: [], keys: [], candidates: 0 };
 }
 
@@ -683,8 +652,7 @@ function emitChanged(): void {
   }
 }
 
-/** Identity, not id: an edit replaces the rule object, so a result that started
- *  before the edit is as stale as one for a rule that was deleted. */
+/** Identity, not id: an edit replaces the rule object, so an in-flight result is stale. */
 function isCurrentRule(rule: MarketAlertRule): boolean {
   return state().rules.includes(rule);
 }
@@ -703,8 +671,6 @@ function clearLastErrorForRule(id: string): void {
 async function runRule(rule: MarketAlertRule): Promise<void> {
   try {
     const outcome = await evaluateRule(rule, false);
-    // A delete, edit or stop landing mid-request must not resurrect seen buckets, hits
-    // or pacing state, nor let a teardown rewrite the seen/hits files under it.
     if (_stopped || !isCurrentRule(rule)) return;
     const now = Date.now();
     _failureCount.delete(rule.id);
@@ -714,12 +680,10 @@ async function runRule(rule: MarketAlertRule): Promise<void> {
     markSeen(rule.id, outcome.keys);
     recordHits(outcome.hits);
     notify(rule, outcome.hits);
-    _cooldownUntil.set(rule.id, now + rule.cooldownMinutes * 60_000);
+    if (!rule.noCooldown) _cooldownUntil.set(rule.id, now + rule.cooldownMinutes * 60_000);
     emitChanged();
     log.info(`Rule "${rule.name}" fired with ${outcome.hits.length} new hit(s)`);
   } catch (err) {
-    // Same teardown rule as the success path: a stop must not re-pace the rule
-    // or push its error at a renderer that is going away.
     if (_stopped) return;
     const message = normalizeErrorMessage(err);
     if (!isCurrentRule(rule)) {
@@ -735,8 +699,6 @@ async function runRule(rule: MarketAlertRule): Promise<void> {
   }
 }
 
-/** Drops the quiet window and eval spacing (including failure backoff) so the rule
- *  runs next tick; the failure count is kept only to size the next backoff. */
 function clearRuleCooldown(id: string): void {
   _cooldownUntil.delete(id);
   _nextEvalAt.delete(id);
@@ -754,12 +716,9 @@ async function tick(): Promise<void> {
   _ticking = true;
   try {
     _lastTickAt = new Date().toISOString();
-    // The whole tick yields while the shared budget is gated or degraded;
-    // background alerts must never compete with a recovering scheduler.
     if (getWfmSchedulerHealth().state !== "ok") return;
     const now = Date.now();
-    // Longest-waiting first, over a snapshot: plain array order plus the per-tick cap
-    // would starve later rules, and the live array can be spliced by a mid-tick delete.
+    // Longest-waiting first, over a snapshot the live array cannot splice mid-tick.
     const due = state()
       .rules.filter((rule) => isDue(rule, now))
       .sort((a, b) => (_nextEvalAt.get(a.id) ?? 0) - (_nextEvalAt.get(b.id) ?? 0))
@@ -822,8 +781,6 @@ export function saveMarketAlertRule(
     current.ownedCounts[rule.item.itemUrlName] = Math.max(0, Math.trunc(ownedCount));
   }
   persistState();
-  // A changed rule means new criteria; re-evaluate on the next tick. The
-  // cooldown goes too, or an edit right after a fire stays silent for its rest.
   _cooldownUntil.delete(rule.id);
   _nextEvalAt.delete(rule.id);
   _failureCount.delete(rule.id);
@@ -836,7 +793,6 @@ export function deleteMarketAlertRule(id: string): boolean {
   if (index < 0) return false;
   const [removed] = current.rules.splice(index, 1);
   delete current.bindings[id];
-  // The owned-count snapshot only exists for the rules that gate on it.
   const slug = removed.item?.itemUrlName;
   if (slug && !current.rules.some((r) => r.item?.itemUrlName === slug)) {
     delete current.ownedCounts[slug];
@@ -859,23 +815,18 @@ export function setMarketAlertRuleEnabled(id: string, enabled: boolean): boolean
   if (!rule) return false;
   rule.enabled = enabled;
   persistState();
-  // Switching a rule back on is a deliberate "watch this again", so it must not
-  // sit out the rest of a cooldown collected before it went quiet.
   if (enabled) clearRuleCooldown(id);
   // A rule switched off will not evaluate again, so its error cannot clear itself.
   else clearLastErrorForRule(id);
   return true;
 }
 
-/** Ends the quiet window a fire started, so the rule may fire again now. */
 export function clearMarketAlertCooldown(id: string): boolean {
   if (!state().rules.some((r) => r.id === id)) return false;
   clearRuleCooldown(id);
   return true;
 }
 
-/** Rule id to cooldown end, epoch ms. Rules whose window has passed are left
- *  out, so the renderer never counts down a cooldown that is already over. */
 export function getMarketAlertCooldowns(): Record<string, number> {
   const now = Date.now();
   const out: Record<string, number> = {};
@@ -916,8 +867,6 @@ export function getMarketAlertEngineStatus(): MarketAlertEngineStatus {
   };
 }
 
-/** Evaluates one rule now, ignoring cooldown and dedup, and sends a toast so
- *  the user can see what a fire looks like. Nothing is marked seen. */
 export async function testFireMarketAlertRule(id: string): Promise<MarketAlertTestFireResult> {
   const rule = state().rules.find((r) => r.id === id);
   if (!rule) return { ok: false, error: "unknown rule" };
@@ -953,8 +902,7 @@ export function importMarketAlertRules(text: unknown): MarketAlertImportOutcome 
   if (current.rules.length + parsed.value.length > MARKET_ALERT_MAX_RULES) {
     return { ok: false, error: "rule limit reached" };
   }
-  // Imported rules arrive disabled so a shared file never starts firing (and
-  // spending WFM budget) before the user has looked at it.
+  // Imported rules arrive disabled so a shared file never fires before the user sees it.
   for (const rule of parsed.value) {
     rule.enabled = false;
     current.rules.push(rule);
@@ -964,8 +912,6 @@ export function importMarketAlertRules(text: unknown): MarketAlertImportOutcome 
   return { ok: true, added: parsed.value.length };
 }
 
-/** Stops the loop for shutdown. A tick that lands mid-quit would write the seen
- *  and hits files while the app is tearing down, so an in-flight one bails too. */
 export function stopMarketAlerts(): void {
   _stopped = true;
   if (_timer) clearInterval(_timer);
@@ -992,7 +938,6 @@ export function resetMarketAlertsForTest(): void {
   _failureCount.clear();
 }
 
-/** Runs one tick immediately; tests drive the loop without waiting a minute. */
 export function runMarketAlertTickForTest(): Promise<void> {
   return tick();
 }

@@ -20,8 +20,7 @@
   --border-strong: rgba(212, 168, 67, 0.25);
   --border-subtle: rgba(255, 255, 255, 0.12);
 
-  /* Semantic surface roles. applyTheme() overwrites all of these at runtime;
-     the literals here are the default preset so first paint is not unstyled. */
+  /* applyTheme() overwrites all of these at runtime; the literals here are the default preset. */
   --surface-panel: #111827;
   --surface-panel-border: rgba(212, 168, 67, 0.1);
   --surface-card: #1a2234;
@@ -61,7 +60,6 @@
   --riven-pip: #5ec8ff;
   --riven-reroll: #f06dff;
 
-  /* Active view accent; falls back to the theme accent when the view has none. */
   --view-accent: var(--accent);
   --view-accent-dim: var(--accent-dim);
   --view-accent-bright: var(--accent-bright);
@@ -81,7 +79,7 @@
   --sidebar-width: 300px;
   --content-gutter: 1.75rem;
   --titlebar-height: 38px;
-  --statusbar-height: 28px;
+  --statusbar-height: calc(var(--font-global-size, 15px) * 28 / 15);
   --item-image-max: 96px;
   --resource-image-wrap: 52px;
   --resource-image-max: 42px;
@@ -96,7 +94,6 @@
   --size-titlebar-control: 2.875rem;
   --size-relic-detail-icon: 3.25rem;
 
-  /* Riven grade colors - consumed by RivensView.gradeColor(). */
   --grade-s: #4ade80;
   --grade-a: #6aab7a;
   --grade-b: #facc15;
@@ -105,12 +102,10 @@
   --grade-f: #ef4444;
   --grade-default: #8b93a5;
 
-  /* Relic reward rarity colors. */
   --rarity-common: #c0a06a;
   --rarity-uncommon: #b0b8c8;
   --rarity-rare: #d4a843;
 
-  /* World cycle state colors. */
   --world-state-day-text: #fbbf24;
   --world-state-night-text: #60a5fa;
   --world-state-warm-text: #f97316;
@@ -123,7 +118,6 @@
   --world-state-sorrow-text: #60a5fa;
   --world-state-fear-text: #a78bfa;
 
-  /* World fissure tier and faction colors. */
   --world-badge-lith-text: #4ade80;
   --world-badge-meso-text: #9a9aa0;
   --world-badge-neo-text: #c0c5d0;

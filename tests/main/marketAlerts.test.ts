@@ -124,15 +124,11 @@ interface OrderSpec {
   platinum?: number;
   quantity?: number;
   visible?: boolean;
-  /** v2 carries the seller platform under `user`. */
   platform?: string;
-  /** The old v1 top-level field, kept to cover the fallback. */
   legacyPlatform?: string;
-  /** A console seller with crossplay on can trade with a PC account. */
   crossplay?: boolean;
 }
 
-// The v2 envelope the engine fetches; a platform only appears when a spec sets it.
 function ordersPayload(specs: OrderSpec[]): unknown {
   return {
     data: specs.map((spec, index) => ({
@@ -231,7 +227,6 @@ describe("riven rule evaluation", () => {
     expect(hits[0].platinum).toBe(100);
     // MR13 r0 0 rolls dissolves for 515 endo.
     expect(hits[0].endoPerPlat).toBeCloseTo(5.2, 1);
-    // Folded, because the history filters on it.
     expect(hits[0].sellerStatus).toBe("online");
   });
 
@@ -249,8 +244,6 @@ describe("riven rule evaluation", () => {
   });
 
   it("matches attributes by exact url_name, never substring", async () => {
-    // The slide-attack slug contains "critical_chance"; substring matching is
-    // the documented failure mode and must not fire here.
     mocks.requestMock.mockResolvedValue(
       auctionPayload([
         {
@@ -414,7 +407,6 @@ describe("riven rule evaluation", () => {
     expect(requestPath).toContain("re_rolls_min=1");
     // WFM ignores `similarity` outright, so it is never sent.
     expect(requestPath).not.toContain("similarity=");
-    // Background priority keeps the sweep behind anything a user is waiting on.
     expect(mocks.requestMock.mock.calls[0][2]).toEqual({ priority: "background" });
   });
 
@@ -440,7 +432,6 @@ describe("riven rule evaluation", () => {
     );
     initEngine();
     await runMarketAlertTickForTest();
-    // A server-side AND would hide exactly the partial rolls the rule wants.
     expect(mocks.requestMock.mock.calls[0][1]).not.toContain("positive_stats");
   });
 
@@ -450,7 +441,6 @@ describe("riven rule evaluation", () => {
         { id: "half", attributes: [{ url_name: "critical_chance", value: 100, positive: true }] },
       ]),
     );
-    // Two required stats, only one present: 50% passes a 50 gate, not 60.
     saveOk(
       rivenRuleRaw({
         id: "rule-50",
@@ -485,15 +475,11 @@ describe("riven rule evaluation", () => {
   it("applies stat-value bounds and endo-per-plat locally", async () => {
     mocks.requestMock.mockResolvedValue(
       auctionPayload([
-        // 120% crit passes the bound; endo/plat for MR14 r8 5 rolls at 100p:
-        // (600 + 5760 + 1000 - 7) / 100 = 73.5.
         { id: "good", buyout: 100 },
-        // Below the crit bound.
         {
           id: "weak",
           attributes: [{ url_name: "critical_chance", value: 80, positive: true }],
         },
-        // Same roll, price too high for the endo gate.
         { id: "pricey", buyout: 10_000 },
       ]),
     );
@@ -521,7 +507,6 @@ describe("riven rule evaluation", () => {
           modRank: 0,
           attributes: [{ url_name: "critical_chance", value: 24.4, positive: true }],
         },
-        // 10% at rank 8 stays 10% and misses the bound.
         {
           id: "weak",
           modRank: 8,
@@ -610,12 +595,10 @@ describe("cooldown and dedup", () => {
     expect(mocks.dispatchMock).toHaveBeenCalledTimes(1);
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
 
-    // Past the eval spacing but inside the 60 minute cooldown: no request at all.
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
 
-    // Past the cooldown: the listing is fetched again but already seen.
     await vi.advanceTimersByTimeAsync(56 * 60_000);
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(2);
@@ -632,18 +615,87 @@ describe("cooldown and dedup", () => {
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
     expect(getMarketAlertCooldowns()["rule-riven"]).toBeGreaterThan(Date.now());
 
-    // Past the eval spacing, inside the 60 minute cooldown: still no request.
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
 
     expect(clearMarketAlertCooldown("rule-riven")).toBe(true);
     expect(getMarketAlertCooldowns()["rule-riven"]).toBeUndefined();
-    // A new listing, because the first one is in the seen file for good.
     mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "second" }]));
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(2);
     expect(mocks.dispatchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts no quiet window for a no-cooldown rule, but still dedups", async () => {
+    vi.useFakeTimers();
+    mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "first" }]));
+    saveOk(rivenRuleRaw({ noCooldown: true }));
+    initEngine();
+    await runMarketAlertTickForTest();
+    expect(mocks.dispatchMock).toHaveBeenCalledTimes(1);
+    expect(getMarketAlertCooldowns()["rule-riven"]).toBeUndefined();
+
+    mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "second" }]));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await runMarketAlertTickForTest();
+    expect(mocks.dispatchMock).toHaveBeenCalledTimes(2);
+    expect(getMarketAlertCooldowns()["rule-riven"]).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await runMarketAlertTickForTest();
+    expect(mocks.requestMock.mock.calls.length).toBeGreaterThan(2);
+    expect(mocks.dispatchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a running cooldown when the rule is saved with the window off", async () => {
+    vi.useFakeTimers();
+    mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "first" }]));
+    saveOk(rivenRuleRaw());
+    initEngine();
+    await runMarketAlertTickForTest();
+    expect(getMarketAlertCooldowns()["rule-riven"]).toBeGreaterThan(Date.now());
+
+    saveOk(rivenRuleRaw({ noCooldown: true }));
+    expect(getMarketAlertCooldowns()["rule-riven"]).toBeUndefined();
+
+    mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "second" }]));
+    await runMarketAlertTickForTest();
+    expect(mocks.dispatchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the quiet window for a rules file written before the toggle existed", async () => {
+    vi.useFakeTimers();
+    fs.writeFileSync(
+      path.join(tmpDir, "market-alert-rules.json"),
+      JSON.stringify({
+        schema: 1,
+        rules: [
+          {
+            id: "rule-riven",
+            name: "Legacy Boar",
+            kind: "riven",
+            enabled: true,
+            cooldownMinutes: 60,
+            riven: {
+              weaponUrlName: "rubico",
+              requirePositive: ["critical_chance"],
+              excludeAttributes: [],
+              statBounds: [],
+            },
+          },
+        ],
+        bindings: { "rule-riven": { native: true } },
+        ownedCounts: {},
+      }),
+      "utf8",
+    );
+
+    expect(listMarketAlertRules().rules[0].noCooldown).toBe(false);
+    mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "first" }]));
+    initEngine();
+    await runMarketAlertTickForTest();
+    expect(getMarketAlertCooldowns()["rule-riven"]).toBeGreaterThan(Date.now());
   });
 
   it("refuses to clear the cooldown of a rule it does not have", () => {
@@ -659,7 +711,6 @@ describe("cooldown and dedup", () => {
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
 
-    // Disabling then re-enabling a rule clears its cooldown.
     setMarketAlertRuleEnabled("rule-riven", false);
     setMarketAlertRuleEnabled("rule-riven", true);
     expect(getMarketAlertCooldowns()["rule-riven"]).toBeUndefined();
@@ -678,7 +729,6 @@ describe("cooldown and dedup", () => {
     await runMarketAlertTickForTest();
     expect(mocks.requestMock).toHaveBeenCalledTimes(1);
 
-    // Deep inside the 60 minute cooldown, but the criteria just changed.
     await vi.advanceTimersByTimeAsync(60_000);
     saveOk(rivenRuleRaw({ riven: { maxPlatinum: 30 } }));
     await runMarketAlertTickForTest();
@@ -692,8 +742,6 @@ describe("cooldown and dedup", () => {
     await runMarketAlertTickForTest();
     expect(mocks.dispatchMock).toHaveBeenCalledTimes(1);
 
-    // Same userData dir, fresh process state: cooldowns are gone, the seen
-    // file is not.
     resetMarketAlertsForTest();
     initEngine();
     await runMarketAlertTickForTest();
@@ -796,9 +844,7 @@ describe("item rule evaluation", () => {
     await runMarketAlertTickForTest();
     const hits = getMarketAlertHits();
     expect(hits).toHaveLength(1);
-    // The seller name is shown, so it keeps the case WFM sent.
     expect(hits[0].seller).toBe("LoudSeller");
-    // The presence is a filter key instead, so it is folded.
     expect(hits[0].sellerStatus).toBe("ingame");
   });
 
@@ -836,14 +882,12 @@ describe("item rule evaluation", () => {
   it("prefers the live owned count over the save-time snapshot", async () => {
     vi.useFakeTimers();
     mocks.requestV2Mock.mockResolvedValue(ordersPayload([{ id: "o1", platinum: 30 }]));
-    // Saved while five were owned, which blocks an "owned below 2" rule.
     saveOk(itemRuleRaw({ item: { ownedBelow: 2 } }), 5);
     liveOwned = { nekros_prime_set: 5 };
     initEngine();
     await runMarketAlertTickForTest();
     expect(mocks.dispatchMock).not.toHaveBeenCalled();
 
-    // The stock is traded away; the rule fires without being re-saved.
     liveOwned = { nekros_prime_set: 1 };
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     await runMarketAlertTickForTest();
@@ -900,7 +944,6 @@ describe("engine plumbing", () => {
     }
     initEngine();
     // setSystemTime avoids extra slots from the engine's own interval hiding starvation.
-    // Four ticks cover all 14 rules only because the oldest waiter always goes first.
     const start = Date.now();
     for (let t = 0; t < 4; t++) {
       vi.setSystemTime(start + t * 60_000);
@@ -960,7 +1003,6 @@ describe("engine plumbing", () => {
     expect(backup).toBeDefined();
     expect(fs.readFileSync(path.join(tmpDir, backup ?? ""), "utf8")).toBe(original);
 
-    // The empty fallback is still writable; the copy is what preserves the file.
     saveOk(rivenRuleRaw());
     expect(listMarketAlertRules().rules).toHaveLength(1);
   });
@@ -1044,7 +1086,6 @@ describe("engine plumbing", () => {
     expect(mocks.dispatchMock).toHaveBeenCalledTimes(1);
     expect(getMarketAlertHits()).toHaveLength(0);
 
-    // The real tick still fires: the test run marked nothing as seen.
     await runMarketAlertTickForTest();
     expect(mocks.dispatchMock).toHaveBeenCalledTimes(2);
     expect(getMarketAlertHits()).toHaveLength(1);
@@ -1156,7 +1197,6 @@ describe("engine shutdown", () => {
 
     expect(mocks.dispatchMock).not.toHaveBeenCalled();
     expect(getMarketAlertHits()).toHaveLength(0);
-    // The teardown must not have the seen and hits files rewritten under it.
     expect(fs.existsSync(path.join(tmpDir, "market-alert-hits.json"))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, "market-alert-seen.json"))).toBe(false);
   });
@@ -1190,8 +1230,6 @@ describe("soak: hours of evaluation under 429s", () => {
     saveOk(rivenRuleRaw());
     initEngine();
 
-    // Phase A: 429s for four hours. Backoff doubles 5 -> 10 -> 20 -> 40 -> 60 then
-    // holds, so the engine sends a handful of requests, not hundreds of ticks' worth.
     await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
     const phaseACalls = mocks.requestMock.mock.calls.length;
     expect(phaseACalls).toBeGreaterThanOrEqual(5);
@@ -1199,12 +1237,10 @@ describe("soak: hours of evaluation under 429s", () => {
     expect(mocks.dispatchMock).not.toHaveBeenCalled();
     expect(getMarketAlertEngineStatus().lastError).toContain("429");
 
-    // Phase B: the shared scheduler reports a gate; the engine goes silent.
     mocks.healthMock.mockReturnValue({ state: "backoff", recentFailures: 6 });
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(mocks.requestMock.mock.calls.length).toBe(phaseACalls);
 
-    // Phase C: WFM recovers; the next due evaluation fires the rule.
     mocks.healthMock.mockReturnValue({ state: "ok", recentFailures: 0 });
     mocks.requestMock.mockResolvedValue(auctionPayload([{ id: "recovered" }]));
     await vi.advanceTimersByTimeAsync(90 * 60_000);
@@ -1235,7 +1271,6 @@ describe("status error lifetime", () => {
 
     setMarketAlertRuleEnabled("rule-riven", false);
     expect(getMarketAlertEngineStatus().lastError).toBeNull();
-    // Switching it back on must not resurrect the old message either.
     setMarketAlertRuleEnabled("rule-riven", true);
     expect(getMarketAlertEngineStatus().lastError).toBeNull();
   });

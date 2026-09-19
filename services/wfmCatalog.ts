@@ -8,8 +8,6 @@ import { formatWfmAssetUrl, titleFromSlug } from "../config/shared/wfm";
 
 const log = withScope("wfmCatalog");
 
-/** Lazily cache the WFM v2 item catalog for main-process lookups. */
-
 const ITEMS_PATH = "/items";
 const LOAD_FAILURE_COOLDOWN_MS = 15_000;
 const BACKEND_CATALOG_TIMEOUT_MS = 10_000;
@@ -28,6 +26,7 @@ interface CatalogItem {
   maxRank: number | null;
   gameRef: string | null;
   subtypes?: string[];
+  hasRanks?: boolean;
 }
 
 let _items: CatalogItem[] = [];
@@ -77,8 +76,6 @@ function backendCatalogUrl(): string {
   return base ? `${base}/v1/wfm-items` : "";
 }
 
-// Worker pass-through cache: cheap, Cloudflare-fronted, and immune to the WFM
-// slowness that otherwise leaves a session with an empty catalog.
 async function _fetchBackendCatalog(): Promise<unknown[]> {
   const url = backendCatalogUrl();
   if (!url) return [];
@@ -113,13 +110,8 @@ async function _load(): Promise<void> {
       if (!rawItems.length) {
         source = "wfm";
         try {
-          // Route through wfmClient so the load spends the same global request
-          // budget as every other WFM call; the scheduler replays transport and
-          // HTTP failures (4 sends per request at worst) and background priority
-          // keeps this sweep behind anything a user is waiting on.
           let data: unknown = null;
-          // A 200 whose body does not unwrap is no failure to the scheduler, so
-          // one more send covers that case here.
+          // A 200 whose body does not unwrap is no failure to the scheduler.
           for (let attempt = 1; attempt <= 2 && data == null; attempt++) {
             const json = await wfmClient.requestV2("GET", ITEMS_PATH, { priority: "background" });
             data = unwrapWfmResponse(json);
@@ -141,8 +133,6 @@ async function _load(): Promise<void> {
         }
       }
 
-      // An empty catalog must not latch: leave _loaded false so the next
-      // demand (renderer retry, search, order form) triggers a fresh fetch.
       if (!rawItems.length) {
         _lastFailureAt = Date.now();
         throw new Error("WFM catalog fetch returned no items");
@@ -173,8 +163,7 @@ async function _load(): Promise<void> {
           _byNameLc.set(slugNameLc, item);
         }
 
-        // A few listings append "(Key)" or "(Veiled)" while the game says the bare
-        // name. Real names are set above, so an alias never displaces one.
+        // A few listings append "(Key)" or "(Veiled)" while the game says the bare name.
         const parenBaseLc = (NAME_PAREN_SUFFIX_RE.exec(nameLc)?.[1] ?? "").trim();
         if (parenBaseLc && !_byNameLc.has(parenBaseLc)) {
           _byNameLc.set(parenBaseLc, item);
@@ -326,7 +315,6 @@ async function loadSetMembership(itemSlug: string): Promise<SetLookup> {
   return result;
 }
 
-/** Resolves a traded item to its complete set without guessing on API failures. */
 export function resolveSetMembership(itemSlug: string): Promise<SetLookup> {
   if (!itemSlug) return Promise.resolve(UNAVAILABLE);
   const cached = _setLookupCache.get(itemSlug);
@@ -367,6 +355,15 @@ export function lookupItemDetails(slug: string): Promise<CatalogItem | null> {
     );
     if (!raw || typeof raw.id !== "string") return null;
     const item = _normalise(raw);
+    // Only item details establish rankless status; the catalog may omit the metadata.
+    if (!("maxRank" in raw) && !("max_rank" in raw)) {
+      item.hasRanks = false;
+    } else {
+      const rank = "maxRank" in raw ? raw.maxRank : raw.max_rank;
+      if (typeof rank === "number" && Number.isInteger(rank) && rank >= 0) {
+        item.hasRanks = rank > 0;
+      }
+    }
     item.subtypes = Array.isArray(raw.subtypes)
       ? [
           ...new Set(

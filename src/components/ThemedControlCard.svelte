@@ -7,7 +7,9 @@
 </script>
 
 {#if as === "label"}
-  <label class="flex items-center justify-between gap-2.5 cursor-pointer {baseClass}">
+  <label
+    class="flex min-w-0 flex-wrap items-center justify-between gap-2.5 cursor-pointer {baseClass}"
+  >
     <slot />
   </label>
 {:else}
@@ -15,3 +17,12 @@
     <slot />
   </div>
 {/if}
+
+<style>
+  label > :global(:first-child) {
+    flex: 1 1 5rem;
+  }
+  label > :global(:last-child) {
+    min-width: 0;
+  }
+</style>

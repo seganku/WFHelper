@@ -6,6 +6,7 @@ import {
   NUM_BUFFS_CURSE_ATTEN,
   SPECIFIC_FIT_ATTEN,
   BASE_DRAIN,
+  isMultiplierTag,
   NON_PERCENTAGE_TAGS,
 } from "./rivenConstants";
 import type {
@@ -52,7 +53,6 @@ const RIVEN_TYPE_LABELS: Record<string, string> = {
 // Keys match exact challenge path suffixes; {n} is replaced with the Required count.
 
 const CHALLENGE_DESCS: Record<string, string> = {
-  // Exact inventory names (with prefixes)
   RandomizedKill: "Kill {n} Enemies",
   RandomizedKillPassengers: "Kill {n} Enemies that are on a Dropship",
   RandomizedKillFallingPilots: "Kill {n} Enemies with Headshots",
@@ -86,7 +86,7 @@ const CHALLENGE_DESCS: Record<string, string> = {
     "Synthesize a Simaris target without using Traps or Abilities while having a Hobbled Dragon Key equipped",
   PlainsTimedVariety: "Catch one fish, mine one gem or metal, and kill one enemy in 30 seconds",
   KahlMissions: "Complete {n} Kahl missions",
-  // DJ / DJRandomized prefix variants (same challenges, different pool)
+  // DJRandomized is the same challenge set from a different pool.
   DJRandomizedKill: "Kill {n} Enemies",
   DJRandomizedFinisherKill: "Kill {n} Enemies with Finishers",
   DJRandomizedHeadshot: "Kill {n} Enemies with Headshots",
@@ -98,7 +98,6 @@ const CHALLENGE_DESCS: Record<string, string> = {
   DJRandomizedFindCaches: "Find {n} Caches",
 };
 
-// Challenge complication path -> appended text
 const COMPLICATION_DESCS: Record<string, string> = {
   ResetOnDamageTaken: "without taking damage",
   ResetOnDowned: "without dying or becoming downed",
@@ -127,7 +126,6 @@ const COMPLICATION_DESCS: Record<string, string> = {
   Undetected: "while undetected",
 };
 
-/** Builds a veiled challenge description from its exact path suffix and complication. */
 function describeChallengeType(
   challengeType: string,
   required?: number,
@@ -140,10 +138,8 @@ function describeChallengeType(
   if (template) {
     desc = template.replace(/\{n\}/g, n);
   } else {
-    // Fallback: split PascalCase into words
     desc = name.replace(/([A-Z])/g, " $1").trim();
   }
-  // Append complication if present
   if (complication) {
     const compName = complication.split("/").pop() || "";
     const compText = COMPLICATION_DESCS[compName];
@@ -254,7 +250,6 @@ function parseFingerprint(raw: string): RawFingerprint | null {
     if (typeof parsed === "string") parsed = JSON.parse(parsed);
     return parsed as RawFingerprint;
   } catch {
-    // Malformed JSON fingerprint - treat as absent.
     return null;
   }
 }
@@ -278,7 +273,6 @@ function decodeSingleRiven(entry: {
   if (!fp || isVeiledFingerprint(fp)) return null;
   if (!fp.compat) return null;
 
-  // Resolve weapon name from compat uniqueName
   const weaponName = rivenData.getWeaponNameByUniqueName(fp.compat);
   if (!weaponName) {
     log.debug(`[Fingerprint] Unknown weapon compat: ${fp.compat}`);
@@ -303,15 +297,13 @@ function decodeSingleRiven(entry: {
   let rollFloatSum = 0;
   let scoredCount = 0;
 
-  // Decode buffs
   for (const b of buffs) {
     const rollFloat = rivenIntToFloat(b.Value);
     const entry2 = rivenData.findUpgradeEntry(rivenTypeKey, b.Tag);
     const baseValue = entry2?.baseValue ?? 0;
     const displayName = rivenData.getStatDisplayName(b.Tag, isMelee);
     const isNonPct = NON_PERCENTAGE_TAGS.has(b.Tag);
-    const isMultiplier =
-      isNonPct && (b.Tag.includes("FactionDamage") || b.Tag === "WeaponMeleeComboInitialBonusMod");
+    const isMultiplier = isMultiplierTag(b.Tag);
     const ctx: StatValueContext = {
       baseValue,
       disposition,
@@ -340,17 +332,14 @@ function decodeSingleRiven(entry: {
     scoredCount++;
   }
 
-  // Decode curses
   for (const c of curses) {
     const rollFloat = rivenIntToFloat(c.Value);
     const entry2 = rivenData.findUpgradeEntry(rivenTypeKey, c.Tag);
     const baseValue = entry2?.baseValue ?? 0;
     const displayName = rivenData.getStatDisplayName(c.Tag, isMelee);
     const isNonPct = NON_PERCENTAGE_TAGS.has(c.Tag);
-    const isMultiplier =
-      isNonPct && (c.Tag.includes("FactionDamage") || c.Tag === "WeaponMeleeComboInitialBonusMod");
+    const isMultiplier = isMultiplierTag(c.Tag);
 
-    // Multipliers stay unsigned - they render as the final factor (x0.55).
     const ctx: StatValueContext = {
       baseValue,
       disposition,
@@ -379,11 +368,9 @@ function decodeSingleRiven(entry: {
     scoredCount++;
   }
 
-  // Overall grade = average roll quality
   const avgRollFloat = scoredCount > 0 ? rollFloatSum / scoredCount : 0.5;
   const overallGrade = rivenGrading.floatToGrade(avgRollFloat, false);
 
-  // Attribute grade (Great/Good/OK/Bad) using the per-weapon good-roll dataset.
   const positives = decodedStats.filter((s) => s.positive);
   const negatives = decodedStats.filter((s) => !s.positive);
   const attributeGrade = rivenGrading.computeAttributeGrade(
@@ -391,7 +378,7 @@ function decodeSingleRiven(entry: {
     weaponName,
   );
 
-  // Generate the riven suffix name (game rule: buffs by roll Value, descending)
+  // Game rule: the suffix orders buffs by roll Value, descending.
   const rivenSuffix = rivenData.generateRivenSuffix(
     rivenTypeKey,
     buffs.map((b) => ({ tag: b.Tag, value: b.Value })),
@@ -428,7 +415,6 @@ export function decodeAllRivens(inventory: Record<string, unknown>): {
   const veiled: VeiledRivenEntry[] = [];
   const unseenCounts = new Map<string, number>();
 
-  // Process Upgrades array (unveiled rivens with unique fingerprints)
   const upgrades = inventory.Upgrades;
   if (Array.isArray(upgrades)) {
     for (const raw of upgrades) {
@@ -440,13 +426,11 @@ export function decodeAllRivens(inventory: Record<string, unknown>): {
       };
       if (!u.ItemType || !isRivenItemType(u.ItemType)) continue;
 
-      // Check if veiled (has challenge fingerprint or no compat)
       if (u.UpgradeFingerprint) {
         const fp = parseFingerprint(u.UpgradeFingerprint);
         if (fp && isVeiledFingerprint(fp)) {
           const label = getRivenTypeLabel(u.ItemType);
           const entry: VeiledRivenEntry = { itemType: u.ItemType, label };
-          // Extract challenge info if present
           if (fp.challenge && typeof fp.challenge === "object") {
             const ch = fp.challenge as {
               Type?: string;
@@ -479,7 +463,6 @@ export function decodeAllRivens(inventory: Record<string, unknown>): {
     }
   }
 
-  // Process RawUpgrades array (stackable veiled rivens - no fingerprint, "unseen")
   const rawUpgrades = inventory.RawUpgrades;
   if (Array.isArray(rawUpgrades)) {
     for (const raw of rawUpgrades) {

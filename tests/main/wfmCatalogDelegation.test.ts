@@ -13,6 +13,25 @@ function stubBackendCatalogOffline(): void {
 }
 
 describe("wfmCatalog item lookups", () => {
+  it.each([
+    { metadata: {}, expected: false },
+    { metadata: { maxRank: 0 }, expected: false },
+    { metadata: { maxRank: 5 }, expected: true },
+    { metadata: { max_rank: 3 }, expected: true },
+    { metadata: { maxRank: null }, expected: undefined },
+    { metadata: { maxRank: "5" }, expected: undefined },
+    { metadata: { maxRank: -1 }, expected: undefined },
+    { metadata: { maxRank: 0.5 }, expected: undefined },
+  ])("classifies authoritative rank metadata $metadata", async ({ metadata, expected }) => {
+    const wfmClient = await import("../../services/wfmClient");
+    vi.spyOn(wfmClient, "requestV2").mockResolvedValue({
+      data: { id: "item", slug: "live_wire", ...metadata },
+    });
+    const catalog = await import("../../services/wfmCatalog");
+
+    expect((await catalog.lookupItemDetails("live_wire"))?.hasRanks).toBe(expected);
+  });
+
   it("loads current item variants without relying on the catalog and shares concurrent lookups", async () => {
     const wfmClient = await import("../../services/wfmClient");
     const request = vi.spyOn(wfmClient, "requestV2").mockResolvedValue({

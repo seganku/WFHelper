@@ -8,6 +8,7 @@ import {
   isOverlayLayoutKind,
   normalizeOverlayFieldStyle,
   normalizeOverlayLayout,
+  OVERLAY_FIELD_OFFSET_LIMIT,
 } from "../../config/shared/overlayLayout";
 
 describe("overlay layout boundaries", () => {
@@ -28,8 +29,8 @@ describe("overlay layout boundaries", () => {
       descriptor.defaultSelectedField,
     ]);
     expect(layout.fields[descriptor.defaultSelectedField]).toEqual({
-      x: descriptor.canvas.width,
-      y: kind === "arbiSummary" ? -440 : -descriptor.canvas.height,
+      x: OVERLAY_FIELD_OFFSET_LIMIT,
+      y: -OVERLAY_FIELD_OFFSET_LIMIT,
       scale: 3,
       color: null,
       hidden: false,

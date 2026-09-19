@@ -457,10 +457,13 @@ async function collectStatus(
 ): Promise<WarframeStatus> {
   if (process.platform === "linux") return collectStatusLinux(needBounds);
 
-  const [processRunning, foregroundWindow] = await Promise.all([
-    getWarframeProcessState(forceProcessScan) === true,
+  const [sampledRunning, foregroundWindow] = await Promise.all([
+    getWarframeProcessState(forceProcessScan),
     getForegroundWindowInfo(),
   ]);
+  // An unknown sample must not read as an exit: it would unregister the overlay
+  // hotkeys and flip warframe.market presence to invisible mid-session.
+  const processRunning = sampledRunning ?? lastStatus?.processRunning ?? false;
 
   const focusedProcessName = foregroundWindow?.processName || null;
   const isFocused = isWarframeProcessName(focusedProcessName);
@@ -502,6 +505,7 @@ export async function getStatus(
 
   const collected = collectStatus(needBounds, forceProcessScan).catch((err) => {
     log.warn("[WarframeStatus] status collection failed:", normalizeErrorMessage(err));
+    if (lastStatus) return { ...lastStatus, checkedAt: Date.now() };
     return {
       isOpen: false,
       isFocused: false,

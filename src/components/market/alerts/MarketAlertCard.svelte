@@ -22,6 +22,7 @@
     onSelect,
     onToggle,
     onClearCooldown,
+    onSetNoCooldown,
     onEdit,
     onDuplicate,
     onDelete,
@@ -39,6 +40,7 @@
     onSelect: (rule: MarketAlertRule, selected: boolean) => void;
     onToggle: (rule: MarketAlertRule) => void;
     onClearCooldown: (rule: MarketAlertRule) => void;
+    onSetNoCooldown: (rule: MarketAlertRule, value: boolean) => void;
     onEdit: (rule: MarketAlertRule) => void;
     onDuplicate: (rule: MarketAlertRule) => void;
     onDelete: (rule: MarketAlertRule) => void;
@@ -199,17 +201,28 @@
   <div
     class="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-2 text-[0.68rem] text-text-muted"
   >
-    <span>{$tr("marketAlerts.cooldownShort", { minutes: rule.cooldownMinutes })}</span>
-    <button
-      class="btn-secondary btn-sm"
-      disabled={!inCooldown}
-      data-alert-clear-cooldown={rule.id}
-      onclick={() => onClearCooldown(rule)}>{$tr("marketAlerts.clearCooldown")}</button
-    >
-    {#if inCooldown}
-      <span data-alert-cooldown-left={rule.id}
-        >{$tr("marketAlerts.cooldownLeft", { minutes: cooldownLeftMinutes })}</span
+    <label class="flex items-center gap-1" title={$tr("marketAlerts.noCooldownHint")}>
+      <input
+        type="checkbox"
+        checked={rule.noCooldown}
+        data-alert-no-cooldown={rule.id}
+        onchange={(event) => onSetNoCooldown(rule, event.currentTarget.checked)}
+      />
+      {$tr("marketAlerts.noCooldown")}
+    </label>
+    {#if !rule.noCooldown}
+      <span>{$tr("marketAlerts.cooldownShort", { minutes: rule.cooldownMinutes })}</span>
+      <button
+        class="btn-secondary btn-sm"
+        disabled={!inCooldown}
+        data-alert-clear-cooldown={rule.id}
+        onclick={() => onClearCooldown(rule)}>{$tr("marketAlerts.clearCooldown")}</button
       >
+      {#if inCooldown}
+        <span data-alert-cooldown-left={rule.id}
+          >{$tr("marketAlerts.cooldownLeft", { minutes: cooldownLeftMinutes })}</span
+        >
+      {/if}
     {/if}
     {#if lastHitAt}
       <span>{$tr("marketAlerts.lastHitAt", { time: lastHitAt })}</span>

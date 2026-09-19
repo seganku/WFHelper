@@ -1,7 +1,6 @@
 import { getOverlayDescriptor } from "../config/shared/overlayLayout";
 import ctx from "./context";
 import { assertArbiSummarySender, onAuthorized } from "./ipcSecurity";
-import { setClickThrough } from "./overlay/clickThrough";
 import {
   createOverlayWindowBoundsChangeHandler,
   createOverlayWindowsController,
@@ -48,11 +47,8 @@ export const arbiSummaryWindowsController = createOverlayWindowsController({
   setOverlayWindow: (window) => {
     ctx.arbiSummaryWindow = window;
   },
-  // Factory interactive mode would focus the window (steals game focus) - stay
-  // non-interactive and re-enable mouse events manually: clickable, never focused.
   getOverlayInteractiveMode: () => false,
   setOverlayInteractiveModeState: () => {},
-  // right-drag works without the unlock hotkey here, so save moves despite passive mode
   persistBoundsWhenPassive: true,
   // Click-through is never wanted here, and on X11 it cannot be undone.
   neverClickThrough: true,
@@ -68,8 +64,7 @@ export const arbiSummaryWindowsController = createOverlayWindowsController({
   windowHeight: WIN_H,
   minWindowWidth: WIN_W,
   minWindowHeight: WIN_H,
-  transparent: false,
-  backgroundColor: "#060a12",
+  transparent: true,
   hasShadow: false,
   windowStateKey: "arbiSummary",
   onWindowBoundsChanged: rememberOverlayWindowBounds,
@@ -77,12 +72,6 @@ export const arbiSummaryWindowsController = createOverlayWindowsController({
 
 export function isArbiSummaryWindow(win: InstanceType<typeof BrowserWindow>): boolean {
   return !!ctx.arbiSummaryWindow && win === ctx.arbiSummaryWindow;
-}
-
-function makeClickable(): void {
-  const win = ctx.arbiSummaryWindow;
-  if (!win || win.isDestroyed()) return;
-  setClickThrough(win, false);
 }
 
 function hideArbiSummary(): void {
@@ -101,12 +90,10 @@ export function maybeShowArbiSummary(run: ArbiRunRecord): void {
     `[ArbiSummary] showing overlay for ${payload.id} (${payload.node}, ${payload.rotations} rotations)`,
   );
   arbiSummaryWindowsController.createOverlayWindow();
-  makeClickable();
   arbiSummaryWindowsController.sendOverlayEvent(ARBI_SUMMARY_DATA, payload);
   arbiSummaryWindowsController.scheduleOverlayAutoHide(AUTO_HIDE_MS);
 }
 
-/** Setup placement step: where the window would appear right now (saved or default). */
 export function getArbiSummaryPlacementRect() {
   return arbiSummaryWindowsController.getOverlayBoundsForActiveDisplay();
 }
@@ -122,8 +109,6 @@ export function configureOverlaySettingsPersistence(persist: () => void): void {
 export function register(): void {
   onAuthorized(ARBI_SUMMARY_READY, assertArbiSummarySender, (event) => {
     arbiSummaryWindowsController.markRendererReady(event.sender.id);
-    // Window (re)load resets ignore-mouse-events; re-apply once it's alive.
-    makeClickable();
   });
 
   onAuthorized(ARBI_SUMMARY_CLOSE, assertArbiSummarySender, () => {

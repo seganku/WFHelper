@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 
-// Mock logger before importing rivenGrading (which imports logger via rivenData)
 vi.mock("../../services/logger", () => ({
   withScope: () => ({
     info: vi.fn(),
@@ -9,8 +8,6 @@ vi.mock("../../services/logger", () => ({
     debug: vi.fn(),
   }),
 }));
-
-// Use real warframe-public-export-plus data for realistic tests.
 
 import {
   correctScannedStats,
@@ -89,58 +86,44 @@ describe("floatToGrade", () => {
   });
 
   it("returns B for mid-roll (0.5)", () => {
-    // lerp(-10, 10, 0.5) = 0 -> B (threshold -0.5)
     expect(floatToGrade(0.5, false)).toBe("B");
   });
 
   it("respects grade boundaries (matches RivenParser.js exactly)", () => {
     // lerp(-10, 10, rollFloat) = -10 + 20*rollFloat
-    // score >= 9.5 -> S: rollFloat >= 19.5/20 = 0.975
     expect(floatToGrade(0.975, false)).toBe("S");
     expect(floatToGrade(0.974, false)).toBe("A+");
 
-    // score >= 7.5 -> A+: rollFloat >= 17.5/20 = 0.875
     expect(floatToGrade(0.875, false)).toBe("A+");
     expect(floatToGrade(0.874, false)).toBe("A");
 
-    // score >= 5.5 -> A: rollFloat >= 15.5/20 = 0.775
     expect(floatToGrade(0.775, false)).toBe("A");
     expect(floatToGrade(0.774, false)).toBe("A-");
 
-    // score >= 3.5 -> A-: rollFloat >= 13.5/20 = 0.675
     expect(floatToGrade(0.675, false)).toBe("A-");
     expect(floatToGrade(0.674, false)).toBe("B+");
 
-    // score >= 1.5 -> B+: rollFloat >= 11.5/20 = 0.575
     expect(floatToGrade(0.575, false)).toBe("B+");
     expect(floatToGrade(0.574, false)).toBe("B");
 
-    // score >= -1.5 -> B: rollFloat >= 8.5/20 = 0.425
     expect(floatToGrade(0.425, false)).toBe("B");
     expect(floatToGrade(0.424, false)).toBe("B-");
 
-    // score >= -3.5 -> B-: rollFloat >= 6.5/20 = 0.325
     expect(floatToGrade(0.325, false)).toBe("B-");
     expect(floatToGrade(0.324, false)).toBe("C+");
 
-    // score >= -9.5 -> C-: rollFloat >= 0.5/20 = 0.025
     expect(floatToGrade(0.025, false)).toBe("C-");
     expect(floatToGrade(0.024, false)).toBe("F");
   });
 
   it("inverts for curses (low value = good curse)", () => {
-    // For curses, rollFloat 1.0 means full-strength curse -> grade S uses (1 - 1.0) = 0.0 -> F
     expect(floatToGrade(1.0, true)).toBe("F");
-    // rollFloat 0.0 for curse -> (1 - 0.0) = 1.0 -> S
     expect(floatToGrade(0.0, true)).toBe("S");
-    // rollFloat 0.5 for curse -> (1 - 0.5) = 0.5 -> B
     expect(floatToGrade(0.5, true)).toBe("B");
   });
 });
 
 describe("unparseBuff", () => {
-  // These fixtures are the min, midpoint, and max of the forward buff formula.
-
   it("returns ~0.5 for a mid-range value", () => {
     const result = unparseBuff(157.5, 0.016666, 0.7, 1, 0, "WeaponCritChanceMod");
     expect(result).toBeCloseTo(0.5, 1);
@@ -157,7 +140,6 @@ describe("unparseBuff", () => {
   });
 
   it("accounts for curse attenuation boost (pow(1.25, numCurses))", () => {
-    // With 1 curse: pow(1.25, 1) = 1.25 -> buff values are ~25% higher at same roll
     // 3 buffs, 0 curses, mid-roll: 0.016666 * 15 * 0.7 * 1 * 1.0 * 0.5 * 9 * 100 = 78.7
     const noCurse = unparseBuff(78.7, 0.016666, 0.7, 3, 0, "WeaponCritChanceMod");
     // 3 buffs, 1 curse, mid-roll: 0.016666 * 15 * 0.7 * 1.25 * 1.0 * 0.5 * 9 * 100 = 98.4
@@ -176,15 +158,14 @@ describe("unparseBuff", () => {
     expect(unparseBuff(50, 0, 1.0, 1, 0)).toBe(0.5);
   });
 
-  it("clamps result to 0-1 range", () => {
-    expect(unparseBuff(9999, 0.016666, 0.7, 1, 0, "WeaponCritChanceMod")).toBe(1.0);
-    expect(unparseBuff(0, 0.016666, 0.7, 1, 0, "WeaponCritChanceMod")).toBe(0.0);
+  it("reports the raw roll for values no card can show", () => {
+    expect(unparseBuff(9999, 0.016666, 0.7, 1, 0, "WeaponCritChanceMod")).toBeCloseTo(312.94, 1);
+    expect(unparseBuff(0, 0.016666, 0.7, 1, 0, "WeaponCritChanceMod")).toBeCloseTo(-4.5, 10);
   });
 });
 
 describe("unparseCurse", () => {
   it("returns a value between 0 and 1 for typical curse values", () => {
-    // Recoil curse (negative baseValue), 3 buffs + 1 curse
     const result = unparseCurse(49.1, -0.01, 0.7, 3, 1, "WeaponRecoilReductionMod");
     expect(result).toBeGreaterThanOrEqual(0);
     expect(result).toBeLessThanOrEqual(1);
@@ -232,8 +213,6 @@ describe("rivenData", () => {
       expect(rivenData.getWeaponDisposition("Nonexistent Weapon")).toBeNull();
     });
 
-    // Duviri ships a Drifter-controlled twin of each of these under the same
-    // display name at a flat 0.5, but rivens roll against the Tenno entry.
     it("resolves a Duviri melee name to the Tenno weapon, not the Drifter twin", () => {
       expect(rivenData.getWeaponDisposition("Sampotes")).toBe(1);
       expect(rivenData.getWeaponDisposition("Syam")).toBe(0.75);
@@ -243,8 +222,6 @@ describe("rivenData", () => {
       expect(rivenData.getWeaponDisposition("Azothane")).toBe(1.1);
     });
 
-    // The twin is deduplicated by name, so the grader's dispo refit cannot
-    // reach 0.5 through the family list either.
     it("lists no Drifter disposition among a Duviri weapon's family variants", () => {
       expect(rivenData.getFamilyVariants("Edun")).toEqual([{ name: "Edun", disposition: 1.15 }]);
     });
@@ -286,8 +263,6 @@ describe("rivenData", () => {
       for (const v of variants) expect(v.disposition).toBeGreaterThan(0);
     });
 
-    // Every kitgun grip in the export carries omegaAttenuation 1, so a grip is no
-    // evidence of the primary form's disposition and no variant may be synthesized.
     it("lists a kitgun chamber under its own name only", () => {
       expect(rivenData.getFamilyVariants("Tombfinger")).toEqual([
         { name: "Tombfinger", disposition: 0.85 },
@@ -298,8 +273,6 @@ describe("rivenData", () => {
     });
 
     it("resolves shotguns via holsterCategory (export dropped the SHOTGUN tag)", () => {
-      // Current export: no shotgun carries the SHOTGUN compat tag any more and
-      // Boar/Sobek/Kohm variants have no tags at all - all fell back to rifle.
       expect(rivenData.resolveRivenType("Boar")).toContain("ShotgunRandomModRare");
       expect(rivenData.resolveRivenType("Tigris Prime")).toContain("ShotgunRandomModRare");
       expect(rivenData.resolveRivenType("Kuva Sobek")).toContain("ShotgunRandomModRare");
@@ -317,7 +290,6 @@ describe("rivenData", () => {
       ]) {
         expect(rivenData.resolveRivenType(weapon)).toContain("ShotgunRandomModRare");
       }
-      // Innate multishot is not the marker: these stay rifle rivens.
       expect(rivenData.resolveRivenType("Quanta")).toContain("RifleRandomModRare");
       expect(rivenData.resolveRivenType("Cernos Prime")).toContain("RifleRandomModRare");
     });
@@ -329,7 +301,6 @@ describe("rivenData", () => {
         { name: "Status Duration", positive: false, value: 52.3 },
       ]);
       expect(graded).not.toBeNull();
-      // A pool that cannot explain the card pins every float at exactly 0 or 1.
       for (const stat of graded!.stats) {
         expect(stat.rollFloat).toBeGreaterThan(0);
         expect(stat.rollFloat).toBeLessThan(1);
@@ -340,35 +311,27 @@ describe("rivenData", () => {
       expect(rivenData.isMeleeWeapon("Sepfahn")).toBe(true);
       expect(rivenData.isMeleeWeapon("Plague Kripath")).toBe(true);
       expect(rivenData.resolveRivenType("Sepfahn")).toContain("ModularMeleeRandomModRare");
-      // Kitgun chambers stay ranged.
       expect(rivenData.isMeleeWeapon("Catchmoon")).toBe(false);
       expect(rivenData.resolveRivenType("Catchmoon")).toContain("ModularPistolRandomModRare");
     });
 
     it("resolves Duviri melee to the ordinary melee riven", () => {
-      // Both names collide with a Drifter twin, so this also pins that the melee
-      // riven type survives whichever entry wins the name key.
       expect(rivenData.resolveRivenType("Sun & Moon")).toContain("MeleeWeaponRandomModRare");
       expect(rivenData.resolveRivenType("Edun")).toContain("MeleeWeaponRandomModRare");
       expect(rivenData.isMeleeWeapon("Edun")).toBe(true);
     });
 
     it("resolves companion weapons by the class they holster as", () => {
-      // SentinelWeapons has no pool of its own, so resolveRivenType returns null
-      // for a sentinel weapon and the riven grades to nothing at all.
       expect(rivenData.resolveRivenType("Verglas")).toContain("RifleRandomModRare");
       expect(rivenData.resolveRivenType("Verglas Prime")).toContain("RifleRandomModRare");
       expect(rivenData.resolveRivenType("Vulklok")).toContain("RifleRandomModRare");
       expect(rivenData.resolveRivenType("Sweeper")).toContain("ShotgunRandomModRare");
       expect(rivenData.resolveRivenType("Deconstructor")).toContain("MeleeWeaponRandomModRare");
-      // Burst Laser and its variants carry no holsterCategory at all.
       expect(rivenData.resolveRivenType("Burst Laser")).toContain("PistolRandomModRare");
       expect(rivenData.resolveRivenType("Prisma Burst Laser")).toContain("PistolRandomModRare");
     });
 
     it("does not invent a riven type for weapons that cannot roll one", () => {
-      // These carry a leftover omegaAttenuation but have no rivens in game, and
-      // DE ships no veiled riven for them either.
       expect(rivenData.resolveRivenType("Artemis Bow")).toBeNull(); // exalted
       expect(rivenData.resolveRivenType("Shadow Claws")).toBeNull(); // exalted
       expect(rivenData.resolveRivenType("Sirocco")).toBeNull(); // operator amp
@@ -455,7 +418,6 @@ describe("rivenData", () => {
   });
 
   describe("generateRivenSuffix", () => {
-    // In-game names order buffs by descending fingerprint value.
     it("orders buffs by roll value descending (Boar Satidra)", () => {
       const shotgunType = rivenData.resolveRivenType("Boar")!;
       const name = rivenData.generateRivenSuffix(shotgunType, [
@@ -509,6 +471,15 @@ describe("gradeRiven", () => {
     expect(result!.overallGrade).toBeTruthy();
   });
 
+  it("clamps a roll float no rank or disposition can fit", () => {
+    const result = gradeRiven("Rubico Prime", [
+      { name: "Critical Chance", positive: true, value: 9999 },
+    ]);
+    expect(result).not.toBeNull();
+    expect(result!.stats[0].rollFloat).toBe(1);
+    expect(result!.stats[0].grade).toBe("S");
+  });
+
   it("grades multiple stats including a curse", () => {
     const result = gradeRiven("Rubico Prime", [
       { name: "Critical Chance", positive: true, value: 90 },
@@ -518,13 +489,9 @@ describe("gradeRiven", () => {
     expect(result).not.toBeNull();
     expect(result!.stats).toHaveLength(3);
     expect(result!.stats[2].positive).toBe(false);
-    // Curse grade should be present
     expect(result!.stats[2].grade).toBeTruthy();
   });
 
-  // A 3-buff/1-curse Edun card rebuilt from the forward formula at its own
-  // disposition. Graded against the Drifter twin's 0.5 every buff clamps to S
-  // and the curse to F, and no family variant or rank exists to refit it.
   it("grades a Duviri melee card against the Tenno disposition", () => {
     const result = gradeRiven("Edun", [
       { name: "Melee Damage", positive: true, value: 177.6 },
@@ -592,7 +559,6 @@ describe("gradeRiven", () => {
   });
 
   it("grades shotgun stats against shotgun bases (Boar Critacan regression)", () => {
-    // Exercises shotgun bases and variant-disposition fitting together.
     const result = gradeRiven("Boar", [
       { name: "Multishot", positive: true, value: 199.3 },
       { name: "Critical Chance", positive: true, value: 163.6 },
@@ -633,8 +599,6 @@ describe("gradeRiven", () => {
 });
 
 describe("kitgun rolls", () => {
-  // A chamber names the card and carries the disposition, so a 4-stat roll that
-  // fits at 0.85 grades mid-range with nothing clamped to S or F.
   it("grades a chamber roll against the chamber's own disposition", () => {
     expect(rivenData.getWeaponDisposition("Tombfinger")).toBe(0.85);
     const result = gradeRiven("Tombfinger", [
@@ -654,8 +618,6 @@ describe("kitgun rolls", () => {
 });
 
 describe("correctScannedStats", () => {
-  // Nami Solo is melee, so a 190.2% middle stat on a 3-buff card can only be
-  // Melee Damage whatever the OCR read there.
   const namiRoll = (middleName: string) => [
     { name: "Additional Combo Count Chance", positive: true, value: 69.3 },
     { name: middleName, positive: true, value: 190.2 },
@@ -708,8 +670,6 @@ describe("correctScannedStats", () => {
     expect(stats.map((s) => s.name)).toEqual(["Damage to Grineer", "Damage"]);
   });
 
-  // A dropped curse line scales every remaining buff up, so a card whose names
-  // are all correct still reads out of range. That is not a misread label.
   const obexBuffs = [
     { name: "Range", positive: true, value: 2.3 },
     { name: "Critical Damage", positive: true, value: 104.6 },
@@ -734,9 +694,6 @@ describe("correctScannedStats", () => {
     ]);
   });
 
-  // A 3-buff Paracesis roll (0.65) graded against Pride (0.50). Critical Damage
-  // alone would fit Melee Damage, but Finisher Damage misfits too, so the
-  // weapon is what is wrong.
   const paracesisRoll = [
     { name: "Critical Damage", positive: true, value: 47.4 },
     { name: "Heat", positive: true, value: 44.8 },
@@ -754,8 +711,6 @@ describe("correctScannedStats", () => {
     expect(corrections).toBe(0);
   });
 
-  // The bailout concludes the weapon is wrong, so the melee rename it made on
-  // the way there belongs to the hypothesis it just rejected.
   it("returns the scanned names when the whole card is rejected", () => {
     const { stats, corrections } = correctScannedStats("Nami Solo", [
       { name: "Damage", positive: true, value: 4000 },
@@ -810,9 +765,6 @@ describe("rivenBestAttributes", () => {
 });
 
 describe("x-multiplier faction damage", () => {
-  // "x1.51" is a +0.51 multiplier and faction damage is a non-percentage tag, so
-  // 0.51 IS the displayed value. Scaling it to 51 counted the scale twice and
-  // pinned every scanned faction roll to the end of its range.
   it("grades a real faction roll inside its range, not clamped", () => {
     const result = gradeRiven("Tatsu", [
       { name: "Status Duration", positive: true, value: 111.6 },
@@ -837,9 +789,6 @@ describe("x-multiplier faction damage", () => {
 });
 
 describe("unranked cards", () => {
-  // An unranked mod shows one ninth of its max-rank values, so all four rolls
-  // sit inside range at Level 0 and grading them at rank 8 scores every one
-  // an F.
   const UNRANKED_WOLF_SLEDGE = [
     { name: "Range", positive: true, value: 0.2 },
     { name: "Critical Damage", positive: true, value: 12.3 },
@@ -866,7 +815,6 @@ describe("unranked cards", () => {
     const result = gradeRiven(weapon, stats);
 
     expect(result).not.toBeNull();
-    // Grading an unranked card at rank 8 clamps every roll to the bottom of its range.
     expect(result!.stats.some((s) => s.rollFloat > 0 && s.rollFloat < 1)).toBe(true);
     expect(result!.overallGrade).not.toBe("F");
   });
@@ -890,7 +838,6 @@ describe("unranked cards", () => {
     ]);
 
     expect(result).not.toBeNull();
-    // Every stat inside its range is what makes the rifle-pool mapping credible.
     for (const stat of result!.stats) {
       expect(stat.rollFloat).toBeGreaterThan(0);
       expect(stat.rollFloat).toBeLessThan(1);
@@ -898,7 +845,6 @@ describe("unranked cards", () => {
   });
 
   it("needs two stats before it will refit a rank", () => {
-    // One value alone fits several ranks; picking one would be a guess.
     const result = gradeRiven("Wolf Sledge", [
       { name: "Critical Damage", positive: true, value: 12.3 },
     ]);
@@ -906,8 +852,6 @@ describe("unranked cards", () => {
     expect(result!.stats[0].rollFloat).toBe(0);
   });
 
-  // Both counts scale every displayed value, so a card read without the curse
-  // line reads 25% high and every buff clamps to the top of its range.
   it("grades a card whose curse the scan dropped on the rolls it shows", () => {
     const maxRank = UNRANKED_WOLF_SLEDGE.map((stat) => ({ ...stat, value: stat.value * 9 }));
     const buffsOnly = maxRank.filter((stat) => stat.positive);
@@ -927,5 +871,61 @@ describe("unranked cards", () => {
 
     expect(result).not.toBeNull();
     expect(result!.stats.every((s) => s.rollFloat === 0 || s.rollFloat === 1)).toBe(true);
+  });
+});
+
+describe("a stated rank", () => {
+  // A rank-0 Boar roll as warframe.market lists it - 228 of the 500 live Boar
+  // auctions are unranked, and their values are a ninth of the rank-8 card.
+  const RANK_0_BOAR = [
+    { name: "Critical Chance", positive: true, value: 17.2 },
+    { name: "Multishot", positive: true, value: 22.6 },
+    { name: "Ammo Maximum", positive: false, value: 7.2 },
+  ];
+  const RANK_8_BOAR = RANK_0_BOAR.map((stat) => ({
+    ...stat,
+    value: Math.round(stat.value * 9 * 10) / 10,
+  }));
+
+  it("grades a rank-0 card exactly like its rank-8 twin", () => {
+    const stated = gradeRiven("Boar", RANK_0_BOAR, 0)!;
+    const maxRank = gradeRiven("Boar", RANK_8_BOAR, 8)!;
+
+    expect(stated.stats.every((s) => s.rollFloat > 0 && s.rollFloat < 1)).toBe(true);
+    expect(stated.stats.map((s) => s.grade)).toEqual(maxRank.stats.map((s) => s.grade));
+    expect(stated.overallGrade).toBe(maxRank.overallGrade);
+  });
+
+  it("falls back to the search when the stated rank leaves every buff clamped", () => {
+    const searched = gradeRiven("Boar", RANK_8_BOAR)!;
+    const asRank0 = gradeRiven("Boar", RANK_8_BOAR, 0)!;
+
+    expect(asRank0.stats.map((s) => s.grade)).toEqual(searched.stats.map((s) => s.grade));
+    expect(asRank0.overallGrade).toBe(searched.overallGrade);
+    expect(asRank0.stats.every((s) => s.rollFloat === 0 || s.rollFloat === 1)).toBe(false);
+  });
+
+  it("prefers the stated rank over the rank the search would pick", () => {
+    const oneStat = RANK_0_BOAR.slice(0, 1);
+    const stated = gradeRiven("Boar", oneStat, 0)!;
+    const searched = gradeRiven("Boar", oneStat)!;
+
+    expect(stated.stats[0].rollFloat).toBeGreaterThan(0);
+    expect(stated.stats[0].rollFloat).toBeLessThan(1);
+    expect(searched.stats[0].rollFloat).toBe(0);
+  });
+
+  it("still searches the rank for a caller that cannot state one", () => {
+    const searched = gradeRiven("Boar", RANK_0_BOAR)!;
+    const stated = gradeRiven("Boar", RANK_0_BOAR, 0)!;
+
+    expect(searched.stats.map((s) => s.grade)).toEqual(stated.stats.map((s) => s.grade));
+  });
+
+  it("falls back to the search when the rank is impossible", () => {
+    const searched = gradeRiven("Boar", RANK_0_BOAR)!;
+    const nonsense = gradeRiven("Boar", RANK_0_BOAR, 42)!;
+
+    expect(nonsense.stats.map((s) => s.grade)).toEqual(searched.stats.map((s) => s.grade));
   });
 });

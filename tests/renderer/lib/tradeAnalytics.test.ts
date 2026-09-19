@@ -4,6 +4,7 @@ import { toLocalDayKey as toDayKey } from "../../../config/shared/dayKey.js";
 import {
   bestSeller,
   categoryNames,
+  clearCategoryOverride,
   computeFlow,
   distinctItemCategories,
   fifoCostBasis,
@@ -11,11 +12,13 @@ import {
   formatPct,
   formatPlat,
   itemKey,
+  itemKeyBase,
   loadCategoryOverrides,
   makeItemKindResolver,
   resolveRangePreset,
   saveCategoryOverrides,
   topItems,
+  tradeItemPriceCacheKey,
   typeRollup,
   UNCATEGORIZED,
   withCategoryOverrides,
@@ -252,8 +255,6 @@ describe("makeItemKindResolver", () => {
   });
 
   it("buckets a rank-tagged arcane by the item database, not by the rank tag", () => {
-    // Most arcanes are not named "Arcane ...", so the name rules never see them
-    // and the dialog's rank tag used to file every one of them as a mod.
     const arcaneDb = {
       ...db,
       "/Lotus/Types/Game/Projections/ArcaneMagusLockdown": {
@@ -299,6 +300,185 @@ describe("itemKey", () => {
       internalName: "/Lotus/Types/Recipes/AshPrimeChassis",
     };
     expect(itemKey(legacy)).toBe(itemKey(current));
+  });
+
+  it("gives every rank of one item its own bucket", () => {
+    const ranked = (rank: number): TradeItem => ({
+      internalName: "",
+      displayName: `Arcane Energize (RANK ${rank})`,
+      count: 1,
+      direction: "given",
+      wfmSlug: "arcane_energize",
+    });
+    expect(itemKey(ranked(0))).toBe("arcane_energize:r0");
+    expect(itemKey(ranked(5))).toBe("arcane_energize:r5");
+    expect(itemKeyBase(itemKey(ranked(5)))).toBe("arcane_energize");
+  });
+
+  it("leaves a row with no rank on the key it always had", () => {
+    const plain = item("Ash Prime Chassis", "given");
+    expect(itemKey(plain)).toBe("/Lotus/AshPrimeChassis");
+    expect(itemKeyBase(itemKey(plain))).toBe("/Lotus/AshPrimeChassis");
+  });
+});
+
+describe("rank rollups", () => {
+  const ranked = (rank: number): TradeItem => ({
+    internalName: "",
+    displayName: `Arcane Energize (RANK ${rank})`,
+    count: 1,
+    direction: "given",
+    wfmSlug: "arcane_energize",
+  });
+  const events = [
+    ev(at("2026-01-01"), "sale", 20, [ranked(0)]),
+    ev(at("2026-01-02"), "sale", 200, [ranked(5)]),
+  ];
+
+  it("splits one arcane's sales by the rank that sold", () => {
+    const rows = topItems(events, "sold");
+    expect(rows.map((r) => ({ name: r.name, rank: r.rank, platinum: r.platinum }))).toEqual([
+      { name: "Arcane Energize", rank: 5, platinum: 200 },
+      { name: "Arcane Energize", rank: 0, platinum: 20 },
+    ]);
+  });
+
+  it("reports the best seller at the rank it sold at", () => {
+    expect(bestSeller(events)).toMatchObject({ name: "Arcane Energize", rank: 5 });
+  });
+
+  it("carries the rank into the worth rows", () => {
+    const rows = worthToday(events, () => 30).rows;
+    expect(rows.map((r) => r.rank).sort()).toEqual([0, 5]);
+  });
+
+  it("keys the price cache by the rank that sold", () => {
+    expect(tradeItemPriceCacheKey(ranked(0), {})).toBe("arcane_energize:rank-v3:r0");
+    expect(tradeItemPriceCacheKey(ranked(5), {})).toBe("arcane_energize:rank-v3:r5");
+  });
+
+  it("keeps an unranked row on the bare slug", () => {
+    const plain: TradeItem = {
+      internalName: "",
+      displayName: "Ash Prime Chassis",
+      count: 1,
+      direction: "given",
+      wfmSlug: "ash_prime_chassis",
+    };
+    const unslugged: TradeItem = { ...plain, wfmSlug: "" };
+    expect(tradeItemPriceCacheKey(plain, {})).toBe("ash_prime_chassis");
+    expect(tradeItemPriceCacheKey(unslugged, {})).toBeNull();
+    expect(
+      tradeItemPriceCacheKey(unslugged, {
+        "ash prime chassis": { url_name: "ash_prime_chassis" },
+      }),
+    ).toBe("ash_prime_chassis");
+  });
+
+  it("leaves a rank the cache has no entry for unpriced", () => {
+    const cache: Record<string, number> = {
+      "arcane_energize:rank-v3:r5": 180,
+      arcane_energize: 12,
+    };
+    const worth = worthToday(events, (item) => {
+      const key = tradeItemPriceCacheKey(item, {});
+      return key == null ? null : (cache[key] ?? null);
+    });
+    expect(worth.rows.map((r) => ({ rank: r.rank, median: r.median }))).toEqual([
+      { rank: 5, median: 180 },
+      { rank: 0, median: null },
+    ]);
+    expect(worth.totalWorth).toBe(180);
+    expect(worth.unpricedRows).toBe(1);
+  });
+
+  it("lists each rank as its own category row", () => {
+    const rows = distinctItemCategories(events, () => UNCATEGORIZED, {});
+    expect(rows.map((r) => r.rank)).toEqual([0, 5]);
+  });
+
+  it("flags a rank row the pre-split override still covers", () => {
+    const overrides = { arcane_energize: "Arcanes" };
+    const rows = distinctItemCategories(
+      events,
+      withCategoryOverrides(() => UNCATEGORIZED, overrides),
+      overrides,
+    );
+    expect(
+      rows.map((r) => ({ rank: r.rank, resolved: r.resolved, overridden: r.overridden })),
+    ).toEqual([
+      { rank: 0, resolved: "Arcanes", overridden: true },
+      { rank: 5, resolved: "Arcanes", overridden: true },
+    ]);
+  });
+
+  it("honours an override saved before the ranks were split apart", () => {
+    const resolve = withCategoryOverrides(() => UNCATEGORIZED, { arcane_energize: "Arcanes" });
+    expect(resolve(ranked(0))).toBe("Arcanes");
+    const perRank = withCategoryOverrides(() => UNCATEGORIZED, {
+      arcane_energize: "Arcanes",
+      "arcane_energize:r5": "Maxed",
+    });
+    expect(perRank(ranked(5))).toBe("Maxed");
+  });
+
+  it("clears one rank without stripping the ranks that inherit the base override", () => {
+    const next = clearCategoryOverride({ arcane_energize: "Arcanes" }, "arcane_energize:r5");
+    const resolve = withCategoryOverrides(() => UNCATEGORIZED, next);
+    expect(resolve(ranked(5))).toBe(UNCATEGORIZED);
+    expect(resolve(ranked(0))).toBe("Arcanes");
+    expect(next.arcane_energize).toBe("Arcanes");
+  });
+
+  it("leaves an unranked row of the same item on the base override", () => {
+    const next = clearCategoryOverride({ arcane_energize: "Arcanes" }, "arcane_energize:r5");
+    const unranked: TradeItem = {
+      internalName: "",
+      displayName: "Arcane Energize",
+      count: 1,
+      direction: "given",
+      wfmSlug: "arcane_energize",
+    };
+    expect(withCategoryOverrides(() => UNCATEGORIZED, next)(unranked)).toBe("Arcanes");
+  });
+
+  it("marks only the cleared rank as no longer overridden", () => {
+    const next = clearCategoryOverride({ arcane_energize: "Arcanes" }, "arcane_energize:r5");
+    const rows = distinctItemCategories(
+      events,
+      withCategoryOverrides(() => UNCATEGORIZED, next),
+      next,
+    );
+    expect(rows.map((r) => ({ rank: r.rank, overridden: r.overridden }))).toEqual([
+      { rank: 0, overridden: true },
+      { rank: 5, overridden: false },
+    ]);
+  });
+
+  it("drops the entry outright when the row owns the override", () => {
+    expect(clearCategoryOverride({ "arcane_energize:r5": "Maxed" }, "arcane_energize:r5")).toEqual(
+      {},
+    );
+    expect(clearCategoryOverride({ arcane_energize: "Arcanes" }, "arcane_energize")).toEqual({});
+  });
+
+  it("keeps a cleared rank cleared across a save and reload", () => {
+    const mem = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => mem.get(key) ?? null,
+      setItem: (key: string, value: string) => void mem.set(key, value),
+    });
+    try {
+      saveCategoryOverrides(
+        clearCategoryOverride({ arcane_energize: "Arcanes" }, "arcane_energize:r5"),
+      );
+      const reloaded = loadCategoryOverrides();
+      const resolve = withCategoryOverrides(() => UNCATEGORIZED, reloaded);
+      expect(resolve(ranked(5))).toBe(UNCATEGORIZED);
+      expect(resolve(ranked(0))).toBe("Arcanes");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -427,6 +607,20 @@ describe("fifoCostBasis", () => {
     expect(basis.matchedUnits).toBe(1);
     expect(basis.estimatedMargin).toBe(30);
   });
+
+  it("pays for a rank 5 sale with the rank 0 purchase of the same arcane", () => {
+    const basis = fifoCostBasis([
+      ev(at("2026-01-01"), "purchase", 10, [
+        item("Arcane Energize (RANK 0)", "received", 1, "/Lotus/ArcaneEnergize"),
+      ]),
+      ev(at("2026-01-02"), "sale", 60, [
+        item("Arcane Energize (RANK 5)", "given", 1, "/Lotus/ArcaneEnergize"),
+      ]),
+    ]);
+    expect(basis.matchedUnits).toBe(1);
+    expect(basis.unpricedUnits).toBe(0);
+    expect(basis.estimatedMargin).toBe(50);
+  });
 });
 
 describe("worthToday", () => {
@@ -520,6 +714,14 @@ describe("category overrides persistence", () => {
     expect(loadCategoryOverrides()).toEqual({});
     mem.set("wf_analysis_category_overrides", JSON.stringify({ a: 5, b: "  " }));
     expect(loadCategoryOverrides()).toEqual({});
+  });
+
+  it("keeps an empty entry, which marks a row cleared rather than uncategorised", () => {
+    saveCategoryOverrides({ arcane_energize: "Arcanes", "arcane_energize:r5": "" });
+    expect(loadCategoryOverrides()).toEqual({
+      arcane_energize: "Arcanes",
+      "arcane_energize:r5": "",
+    });
   });
 
   it("returns empty when storage is absent entirely", () => {

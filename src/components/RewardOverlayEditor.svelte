@@ -3,6 +3,7 @@
   import {
     DEFAULT_OVERLAY_FIELD_STYLE,
     getOverlayDescriptor,
+    OVERLAY_FIELD_OFFSET_LIMIT,
   } from "../../config/shared/overlayLayout.js";
   import type {
     OverlayLayoutKind,
@@ -12,6 +13,7 @@
   } from "../../config/shared/overlayLayout.js";
   import { tr } from "../lib/i18n.js";
   import type { MessageKey } from "../lib/i18n.js";
+  import type { IpcInvokeMap } from "../types/ipc.js";
   import { invoke, on } from "../lib/ipc.js";
   import ModalShell from "./ModalShell.svelte";
   import RewardOverlayCanvas from "./RewardOverlayCanvas.svelte";
@@ -19,7 +21,8 @@
   let { onClose, kind = "reward" }: { onClose: () => void; kind?: OverlayLayoutKind } = $props();
   const descriptor = $derived(getOverlayDescriptor(kind));
   const labels = $derived(descriptor.labels);
-  const variants = $derived(descriptor.variants);
+  let previewContext = $state<IpcInvokeMap["getOverlayPreview"]["return"]>();
+  const variants = $derived(previewContext?.descriptor.variants ?? descriptor.variants);
   const previewCounts = $derived(descriptor.previewCounts);
   let editState = $state<OverlayEditState | null>(null);
   let errorKey = $state<MessageKey | null>(null);
@@ -207,6 +210,9 @@
                   state={editState}
                   onCommand={update}
                   onCancel={() => void finish(false)}
+                  onContext={(context) => {
+                    previewContext = context;
+                  }}
                 />
               </div>
             </div>
@@ -225,8 +231,8 @@
                       type="number"
                       data-reward-editor-position={axis}
                       value={axis === "x" ? style.x : style.y}
-                      min={-(axis === "x" ? descriptor.canvas.width : descriptor.canvas.height)}
-                      max={axis === "x" ? descriptor.canvas.width : descriptor.canvas.height}
+                      min={-OVERLAY_FIELD_OFFSET_LIMIT}
+                      max={OVERLAY_FIELD_OFFSET_LIMIT}
                       step="1"
                       class="w-full rounded border border-border bg-bg-deep px-2 py-1.5 text-sm text-text-primary"
                       onchange={(event) =>
@@ -335,6 +341,7 @@
                 {$tr("rewardEditor.choices")}
                 <select
                   data-reward-editor-count
+                  disabled={editState.previewVariant === "last"}
                   value={editState.previewCount}
                   class="rounded border border-border bg-bg-deep px-2 py-1.5 text-sm text-text-primary"
                   onchange={(event) => {

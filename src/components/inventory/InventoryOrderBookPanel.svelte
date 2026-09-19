@@ -26,13 +26,11 @@
     isRankedGroup,
     resolveRankedMaxRank,
   } from "../../../config/shared/numeric.js";
-  import { isActiveOrderStatus } from "../../../config/shared/wfmOrders.js";
+  import { formatUnitPlatinum, isActiveOrderStatus } from "../../../config/shared/wfmOrders.js";
 
   export let item: InventoryViewItem | null = null;
   export let onClose: (() => void) | null = null;
 
-  // Captured at open time so a background reselect cannot swap the chart out
-  // from under the reader.
   let statsSlug: string | null = null;
   let statsTitle = "";
 
@@ -140,10 +138,12 @@
   $: hiddenBuy = (orderBook?.buy.length ?? 0) - filteredBuyBase.length;
   $: bestSell =
     filteredSellBase.length > 0
-      ? Math.min(...filteredSellBase.map((entry) => entry.platinum))
+      ? Math.min(...filteredSellBase.map((entry) => entry.unitPlatinum))
       : null;
   $: bestBuy =
-    filteredBuyBase.length > 0 ? Math.max(...filteredBuyBase.map((entry) => entry.platinum)) : null;
+    filteredBuyBase.length > 0
+      ? Math.max(...filteredBuyBase.map((entry) => entry.unitPlatinum))
+      : null;
   $: spread = bestSell != null && bestBuy != null ? bestSell - bestBuy : null;
   $: sellRows = sortEntries(filteredSellBase, "sell", sellSort).slice(0, DISPLAY_ROWS_PER_SIDE);
   $: buyRows = sortEntries(filteredBuyBase, "buy", buySort).slice(0, DISPLAY_ROWS_PER_SIDE);
@@ -281,8 +281,8 @@
   }
 
   function compareBestSide(a: OrderBookEntry, b: OrderBookEntry, side: OrderSide): number {
-    if (a.platinum !== b.platinum) {
-      return side === "sell" ? a.platinum - b.platinum : b.platinum - a.platinum;
+    if (a.unitPlatinum !== b.unitPlatinum) {
+      return side === "sell" ? a.unitPlatinum - b.unitPlatinum : b.unitPlatinum - a.unitPlatinum;
     }
     if (a.quantity !== b.quantity) {
       return b.quantity - a.quantity;
@@ -302,12 +302,12 @@
       }
 
       if (mode === "price_low") {
-        if (a.platinum !== b.platinum) return a.platinum - b.platinum;
+        if (a.unitPlatinum !== b.unitPlatinum) return a.unitPlatinum - b.unitPlatinum;
         return b.quantity - a.quantity;
       }
 
       if (mode === "price_high") {
-        if (a.platinum !== b.platinum) return b.platinum - a.platinum;
+        if (a.unitPlatinum !== b.unitPlatinum) return b.unitPlatinum - a.unitPlatinum;
         return b.quantity - a.quantity;
       }
 
@@ -340,6 +340,14 @@
     if (!item) return "";
     const rankSuffix = isRankedListingItem ? ` (Rank ${entry.rank ?? 0})` : "";
     const itemText = `${item.name}${rankSuffix}`;
+    if (entry.perTrade > 1) {
+      return $tr(side === "sell" ? "common.whisperBuyBulk" : "common.whisperSellBulk", {
+        user: entry.userName,
+        item: itemText,
+        count: entry.perTrade,
+        platinum: entry.platinum,
+      });
+    }
     if (side === "sell") {
       return $tr("common.whisperBuy", {
         user: entry.userName,
@@ -424,10 +432,6 @@
   data-orderbook-panel
   class="inventory-orderbook-panel sticky flex flex-col gap-2.5 rounded-lg border border-border bg-bg-surface p-2.5 min-[1101px]:overflow-y-auto max-[1100px]:fixed max-[1100px]:right-2.5 max-[1100px]:top-[calc(var(--titlebar-height)+0.625rem)] max-[1100px]:bottom-[calc(var(--statusbar-height)+0.625rem)] max-[1100px]:z-40 max-[1100px]:w-[min(360px,calc(100vw-5rem))] max-[1100px]:overflow-y-auto"
 >
-  <!-- Sticky inside the panel's own scrollport so the warframe.market button
-       stays reachable however far the listings are scrolled (issue #29); the
-       breakpoint fix below only pins the panel itself. It wraps as a whole row
-       because a squeezed panel used to break labels and double button height. -->
   <div
     class="sticky -top-2.5 z-10 -mx-2.5 -mt-2.5 flex flex-wrap items-center justify-between gap-1.5 bg-bg-surface px-2.5 pt-2.5"
   >
@@ -545,24 +549,30 @@
           <span class="text-xs uppercase tracking-[0.05em] text-text-muted"
             >{$tr("orderbook.bestWts")}</span
           >
-          <strong class="font-display text-xs text-success"
-            >{bestSell != null ? `${bestSell}p` : "-"}</strong
+          <strong
+            class="font-display text-xs text-success"
+            data-orderbook-best-sell={bestSell != null ? formatUnitPlatinum(bestSell) : ""}
+            >{bestSell != null ? `${formatUnitPlatinum(bestSell)}p` : "-"}</strong
           >
         </div>
         <div class="grid gap-0.5 rounded-lg border border-border bg-bg-soft px-2 py-1.5">
           <span class="text-xs uppercase tracking-[0.05em] text-text-muted"
             >{$tr("orderbook.bestWtb")}</span
           >
-          <strong class="font-display text-xs text-danger"
-            >{bestBuy != null ? `${bestBuy}p` : "-"}</strong
+          <strong
+            class="font-display text-xs text-danger"
+            data-orderbook-best-buy={bestBuy != null ? formatUnitPlatinum(bestBuy) : ""}
+            >{bestBuy != null ? `${formatUnitPlatinum(bestBuy)}p` : "-"}</strong
           >
         </div>
         <div class="grid gap-0.5 rounded-lg border border-border bg-bg-soft px-2 py-1.5">
           <span class="text-xs uppercase tracking-[0.05em] text-text-muted"
             >{$tr("orderbook.spread")}</span
           >
-          <strong class="font-display text-xs text-text-primary"
-            >{spread != null ? `${spread}p` : "-"}</strong
+          <strong
+            class="font-display text-xs text-text-primary"
+            data-orderbook-spread={spread != null ? formatUnitPlatinum(spread) : ""}
+            >{spread != null ? `${formatUnitPlatinum(spread)}p` : "-"}</strong
           >
         </div>
       </div>
@@ -650,10 +660,6 @@
 {/if}
 
 <style>
-  /* Pinned under the sticky filter band, not at the scrollport top: the band is
-     opaque and paints above this panel, so a top of 0.625rem buried the header
-     row with the warframe.market button (issue #29). The cap keeps an opened
-     filter popover from pushing the panel off the bottom of the window. */
   .inventory-orderbook-panel {
     --orderbook-pin-top: min(calc(var(--inventory-sticky-height, 0px) + 0.625rem), 45vh);
   }

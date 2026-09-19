@@ -2,7 +2,7 @@
   import { showMasteredBadges, showOwnedParentBadges } from "../stores/preferences.js";
   import { itemLabel } from "../lib/itemLabel.js";
   import { activeRelic } from "../stores/modals.js";
-  import { itemDb, componentOwnership } from "../stores/data.js";
+  import { itemDb, componentOwnership, foundryData } from "../stores/data.js";
   import { masteryData } from "../stores/mastery.js";
   import { relicOwnedCounts } from "../stores/relics.js";
   import { sortRelicRewards } from "../../config/shared/relicRewardOrder.js";
@@ -187,7 +187,7 @@
   $: iconSrc = group ? group.imageUrl || RELIC_ICON_PATHS[tierCls] || RELIC_ICON_PATHS.default : "";
 
   $: itemNameIndex = buildItemNameIndex($itemDb);
-  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData);
+  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData, $foundryData);
 
   function selectReward(reward: RelicReward): void {
     if (selectedReward === reward) {

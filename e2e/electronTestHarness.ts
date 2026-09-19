@@ -20,12 +20,11 @@ interface ElectronTestHarnessOptions {
   storage?: Record<string, string>;
   inventory?: unknown;
   onPage?: (page: Page) => void | Promise<void>;
-  /** Electron --lang switch, which is what navigator.language reports. */
   lang?: string;
   /** Leave app-language unset so detectLocale() falls through to the OS locale. */
   skipLanguageSeed?: boolean;
-  /** JSON files to drop into userData before launch, keyed by file name. */
   userDataFiles?: Record<string, unknown>;
+  env?: Record<string, string>;
 }
 
 export interface ElectronTestHarness {
@@ -81,6 +80,7 @@ async function startHarness(
   env.WFHELPER_EE_LOG = path.join(localAppData, "Warframe", "EE.log");
   env.APPDATA = path.join(sandboxDir, "roaming");
   env.WFHELPER_USER_DATA = userData;
+  Object.assign(env, options.env ?? {});
 
   let app: ElectronApplication | null = null;
   let saveArtifacts: ((failed?: boolean, failure?: unknown) => Promise<void>) | undefined;
@@ -118,8 +118,6 @@ async function startHarness(
     await saveArtifacts(true, error).catch((artifactError: unknown) =>
       console.warn("[harness] artifacts:", artifactError),
     );
-    // Without this the caller never gets a harness, so the process and the
-    // sandbox dir would both leak on any failure above.
     try {
       if (app) await stopElectron(app);
     } catch {
@@ -149,39 +147,139 @@ export async function restartElectronTestHarness(
   return startHarness(harness.sandboxDir, { ...state.options, ...options }, false);
 }
 
-/** Viewport in CSS pixels. setViewportSize takes device pixels and the app
- * divides by the uiScale zoom, so the request is re-applied scaled. */
-export async function setLayoutViewport(page: Page, width: number, height: number): Promise<void> {
-  await page.setViewportSize({ width, height });
-  // After a reload the zoom can land a frame late, so a single probe would read
-  // device pixels and skip the rescale. Settle on a width that repeats.
+const SETTLE_TIMEOUT_MS = 15_000;
+
+async function pollValue<T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+  let value = await read();
+  while (!done(value) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    value = await read();
+  }
+  return value;
+}
+
+// After a reload the zoom can land a frame late, so a single probe would read
+// device pixels and skip the rescale. Settle on a width that repeats.
+async function settledInnerWidth(page: Page): Promise<number> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let previous = NaN;
   let applied = await page.evaluate(() => window.innerWidth);
-  for (let attempt = 0; attempt < 6 && applied !== previous; attempt += 1) {
-    await page.waitForTimeout(75);
+  while ((applied !== previous || !applied) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 75));
     previous = applied;
     applied = await page.evaluate(() => window.innerWidth);
   }
   if (applied !== previous || !applied) {
     throw new Error(`viewport width never settled (${previous} -> ${applied})`);
   }
+  return applied;
+}
+
+/** Sizes the renderer's CSS viewport: window.innerWidth lands on `width` at any
+ *  uiScale zoom. Playwright's setViewportSize takes device pixels and the app
+ *  divides by the zoom, so the request is re-applied scaled. Use setWindowSize
+ *  instead to size the Electron window a user would drag. */
+export async function setLayoutViewport(page: Page, width: number, height: number): Promise<void> {
+  await page.setViewportSize({ width, height });
+  const applied = await settledInnerWidth(page);
   const zoom = width / applied;
   if (Math.abs(zoom - 1) < 0.01) return;
   await page.setViewportSize({
     width: Math.round(width * zoom),
     height: Math.round(height * zoom),
   });
-  await page.waitForTimeout(75);
-  const landed = await page.evaluate(() => window.innerWidth);
-  if (Math.abs(landed - width) > Math.max(1, width * 0.01)) {
+  const tolerance = Math.max(1, width * 0.01);
+  const landed = await pollValue(
+    () => page.evaluate(() => window.innerWidth),
+    (value) => Math.abs(value - width) <= tolerance,
+  );
+  if (Math.abs(landed - width) > tolerance) {
     throw new Error(`viewport landed at ${landed} CSS px, wanted ${width}`);
   }
+}
+
+/** Sizes the Electron window a user would drag: `width`/`height` are its
+ *  device-independent content size, so the CSS viewport is that divided by the
+ *  display-derived UI zoom (config/runtime/uiScale.ts). A Playwright viewport
+ *  does not resize the window. Throws when the window did not land there. */
+export async function setWindowSize(
+  harness: ElectronTestHarness,
+  width: number,
+  height: number,
+): Promise<void> {
+  const zoomFactor = await evaluateInMain(
+    harness.app,
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes("renderer/dist/index.html"),
+      );
+      if (!win) throw new Error("main window not found");
+      win.setContentSize(size.width, size.height);
+      return win.webContents.getZoomFactor();
+    },
+    { width, height },
+  );
+  const zoom = zoomFactor > 0 ? zoomFactor : 1;
+  const expected = { width: width / zoom, height: height / zoom };
+  const landed = await pollValue(
+    () =>
+      harness.page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      })),
+    (size) =>
+      Math.abs(size.width - expected.width) <= 2 && Math.abs(size.height - expected.height) <= 2,
+  );
+  if (
+    Math.abs(landed.width - expected.width) > 2 ||
+    Math.abs(landed.height - expected.height) > 2
+  ) {
+    throw new Error(
+      `window landed at ${landed.width}x${landed.height} css px, wanted ` +
+        `${Math.round(expected.width)}x${Math.round(expected.height)} ` +
+        `(${width}x${height} at zoom ${zoom})`,
+    );
+  }
+}
+
+export const LAYOUT_SIZES: ReadonlyArray<{ width: number; height: number }> = [
+  { width: 1366, height: 728 },
+  { width: 1280, height: 680 },
+];
+export const LAYOUT_SCALES: readonly number[] = [1.25, 1.5];
+
+export async function dragRange(slider: Locator, value: number | string): Promise<void> {
+  await slider.evaluate((element, next) => {
+    const input = element as HTMLInputElement;
+    input.value = String(next);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, value);
+}
+
+export async function releaseRange(slider: Locator): Promise<void> {
+  await slider.evaluate((element) => element.dispatchEvent(new Event("change", { bubbles: true })));
 }
 
 export function selectOptionValues(select: Locator): Promise<string[]> {
   return select.evaluate((element) =>
     Array.from((element as HTMLSelectElement).options, (option) => option.value),
   );
+}
+
+/** Settings > Appearance > Font Sizes > Global Scale, applied through a reload;
+ *  null clears the stored theme so the default scale comes back. */
+export async function setFontScale(page: Page, scale: number | null): Promise<void> {
+  await page.evaluate((value) => {
+    if (value === null) localStorage.removeItem("wf_theme_settings");
+    else
+      localStorage.setItem(
+        "wf_theme_settings",
+        JSON.stringify({ version: 1, fontSizes: { globalScale: value } }),
+      );
+  }, scale);
+  await page.reload();
+  await page.waitForSelector("#sidebar", { state: "visible", timeout: 90_000 });
 }
 
 /** Sidebar labels are translated, so navigate by data-view. */
@@ -264,8 +362,6 @@ export async function closeElectronTestHarness(
 }
 
 export async function stopElectron(app: ElectronApplication): Promise<void> {
-  // Playwright waits for any exit, including a crash. Bound the wait and check
-  // the actual process status before counting teardown as successful.
   const child = harnessProcesses.get(app) ?? app.process();
   if (child.exitCode !== null || child.signalCode) {
     if (child.exitCode !== 0 || child.signalCode)
@@ -305,7 +401,6 @@ function removeSandbox(dir: string): void {
   try {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   } catch (error) {
-    // A leaked temp sandbox beats failing the run over cleanup.
     console.warn(`[harness] sandbox cleanup left ${dir}: ${String(error)}`);
   }
 }

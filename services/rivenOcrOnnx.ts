@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import { withScope } from "./logger";
 import { resolveRuntimeResourcePath } from "./runtimeResources";
+import { loadSharp } from "./sharpRuntime";
 
 const log = withScope("rivenOcrOnnx");
 
@@ -139,7 +140,7 @@ async function yoloDetectStatLines(
 
   const ort: typeof import("onnxruntime-node") = require("onnxruntime-node");
 
-  const sharp: (typeof import("sharp"))["default"] = require("sharp");
+  const sharp = loadSharp();
 
   const imgsz = _yoloInputSize; // 640
 
@@ -271,7 +272,7 @@ async function extractAndUpscaleCrops(
 ): Promise<RgbCrop[]> {
   if (boxes.length === 0) return [];
 
-  const sharp: (typeof import("sharp"))["default"] = require("sharp");
+  const sharp = loadSharp();
 
   const rawCrops: RgbCrop[] = [];
   for (const box of boxes) {
@@ -451,7 +452,7 @@ async function recognizeChunk(
 ): Promise<OcrLineResult[]> {
   const ort: typeof import("onnxruntime-node") = require("onnxruntime-node");
 
-  const sharp: (typeof import("sharp"))["default"] = require("sharp");
+  const sharp = loadSharp();
 
   const imgH = REC_IMG_HEIGHT;
 

@@ -52,6 +52,7 @@
     hideFounderMasteryItems,
     showMasteredBadges,
     showOwnedParentBadges,
+    showVaultedBadges,
   } from "../stores/preferences.js";
   import { startTour } from "../stores/tour.js";
   import { currentView } from "../stores/app.js";
@@ -75,8 +76,6 @@
 
   let settingsTab: "general" | "appearance" | "customization" | "overlay" = "general";
   let customizationRevision = 0;
-  // The store owns the language: the select only mirrors it, so an external
-  // setLocale is not written back over.
   let languageChoice: LocaleCode;
   $: languageChoice = $locale;
   $: if (languageChoice !== $locale) setLocale(languageChoice);
@@ -138,8 +137,6 @@
     }
   }
 
-  // The pickers own the switch to a user file: a cancelled dialog returns null
-  // and main keeps the current source.
   async function selectInventorySource(next: InventorySource): Promise<void> {
     if (switchingSource || next === inventorySource) return;
     switchingSource = true;
@@ -186,7 +183,6 @@
     }
   }
 
-  // Same channel the setup wizard uses: persists overlayWindowScales + live-applies.
   async function saveWindowScale(key: OverlayWindowKey, value: number): Promise<void> {
     windowScales = { ...windowScales, [key]: value };
     try {
@@ -197,7 +193,6 @@
     }
   }
 
-  // Every editable overlay field, in the order the panel shows them.
   const OVERLAY_FORM_KEYS = [
     "autoTriggerEnabled",
     "notificationSoundEnabled",
@@ -235,9 +230,7 @@
 
   type OverlayForm = Pick<typeof OVERLAY_DEFAULTS, (typeof OVERLAY_FORM_KEYS)[number]>;
 
-  // A missing key takes its declared default; three of these default to true,
-  // so coercing absence to false silently disables the user's hotkeys. A hotkey
-  // cleared to "" is absence too.
+  // A missing key takes its declared default; coercing absence to false silently disables hotkeys. A hotkey cleared to "" is absence too.
   function normalizeOverlayForm(s: OverlaySettingsFormInput): OverlayForm {
     const out: Record<string, unknown> = {};
     for (const key of OVERLAY_FORM_KEYS) {
@@ -252,8 +245,6 @@
   }
 
   let form = normalizeOverlayForm(OVERLAY_DEFAULTS);
-  // Display-only: the per-window rows fall back to it, but no control edits it,
-  // so it is deliberately absent from the saved payload.
   let overlayScale = OVERLAY_DEFAULTS.overlayScale;
 
   function applyToForm(s: OverlaySettingsFormInput): void {
@@ -262,11 +253,9 @@
     windowScales = { ...(s.overlayWindowScales || {}) };
   }
 
-  // The detected value only drives the row while auto mode is on.
   $: uiScaleDetected = form.warframeUiScaleAuto ? $detectedWarframeUiScale : null;
 
-  // Live updates arrive via the warframe-ui-scale-updated push whenever the
-  // game saves EE.cfg; this pull seeds the store and covers missed pushes.
+  // Live updates arrive via the warframe-ui-scale-updated push whenever the game saves EE.cfg.
   async function refreshDetectedUiScale(): Promise<void> {
     try {
       detectedWarframeUiScale.set(await invoke("getDetectedWarframeUiScale"));
@@ -289,7 +278,6 @@
     inventorySelections: "settings.channelSourceInventorySelections",
   };
 
-  // Shared list, so a source that gains a producer shows up here on its own.
   const SOURCE_ROWS = ROUTABLE_NOTIFICATION_SOURCES.map((source) => ({
     source: source as NotificationSource,
     labelKey: SOURCE_LABEL_KEYS[source],
@@ -313,8 +301,7 @@
   let webhookDrafts: Record<WebhookChannel, string> = { discord: "", generic: "" };
   let webhookBusy: Record<WebhookChannel, boolean> = { discord: false, generic: false };
 
-  // Only main knows the saved URLs, so the drafts stay empty and the row shows
-  // the masked form instead of ever holding a secret in renderer state.
+  // Only main knows the saved URLs, so the drafts stay empty and the row shows the masked form.
   async function refreshChannels(): Promise<void> {
     try {
       channelState = await invoke("getNotificationChannels");
@@ -398,8 +385,6 @@
     }
     applyToForm($overlaySettings);
     await refreshDetectedUiScale();
-    // The view stays mounted once visited; refresh on focus so alt-tabbing
-    // back from an in-game scale change shows the new value.
     window.addEventListener("focus", refreshDetectedUiScale);
     await refreshInventorySource();
     await refreshChannels();
@@ -410,9 +395,7 @@
   let saveRevision = 0;
   let saveQueue: Promise<void> = Promise.resolve();
 
-  // Re-normalized on the way out because an emptied number input binds to null,
-  // which the main-process clamp reads as 0 and raises to the range floor
-  // instead of falling back to the declared default.
+  // An emptied number input binds to null, which the main-process clamp reads as 0.
   function currentOverlayPayload() {
     return normalizeOverlayForm(form);
   }
@@ -443,13 +426,10 @@
     return queueSave(currentOverlayPayload(), $tr("settings.saved"), $tr("settings.saveFailed"));
   }
 
-  // Every control saves on change; there is no separate save step.
   function autoSave(): void {
     void save();
   }
 
-  // Return undefined for Escape, bare Tab, and lone modifiers so cancellation,
-  // navigation, and incomplete combos retain their normal behavior.
   function captureAccelerator(e: KeyboardEvent): string | undefined {
     const key = e.key;
     if (key === "Escape") return undefined;
@@ -743,7 +723,6 @@
               <p class="m-0 mt-2 text-xs text-text-muted">{$tr("settings.channelRoutingDesc")}</p>
 
               {#each SOURCE_ROWS as row (row.source)}
-                <!-- Read here, not through channelToggles, so the async load repaints. -->
                 {@const toggles =
                   channelState?.sources[row.source] ?? DEFAULT_SOURCE_CHANNELS[row.source]}
                 <SettingsRow
@@ -860,6 +839,12 @@
               >
                 <input type="checkbox" bind:checked={$showOwnedParentBadges} />
               </SettingsRow>
+              <SettingsRow
+                label={$tr("settings.showVaultedBadges")}
+                dataSetting="show-vaulted-badges"
+              >
+                <input type="checkbox" bind:checked={$showVaultedBadges} />
+              </SettingsRow>
             </div>
           </SettingsSection>
 
@@ -928,8 +913,6 @@
       </div>
 
       <div class="settings-wide-actions pb-3">
-        <!-- Five buttons wrap on a narrow window, and the note glued to the last
-             one read as a sixth; ml-auto parks it at the end of its own line. -->
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-2" data-settings-actions>
           <button class="btn-secondary btn-sm" on:click={resetDefaults}
             >{$tr("settings.resetDefaults")}</button
@@ -1217,8 +1200,6 @@
 {/if}
 
 <style>
-  /* Size container so the supporters panel can query the real content width
-     (the viewport lies once the sidebar expands). */
   .settings-shell {
     container-type: inline-size;
   }
@@ -1230,8 +1211,6 @@
     align-items: start;
   }
 
-  /* Positioning context for the supporters panel, which floats in the dead
-     space right of the 1120px view cap on wide windows. */
   .settings-general-layout {
     position: relative;
   }
@@ -1278,7 +1257,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Multicol packs cards tight; grid rows would leave dead space under short cards. */
   .settings-masonry {
     display: block;
     columns: 3 320px;

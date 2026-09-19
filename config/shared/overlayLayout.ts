@@ -161,7 +161,9 @@ type OverlayPreviewLabelKey =
   | "overlayEditor.preview.waiting"
   | "rewardEditor.previewError"
   | "rewardEditor.previewMissing"
-  | "rewardEditor.previewRewards";
+  | "rewardEditor.previewRewards"
+  | "rewardEditor.previewMixed"
+  | "rewardEditor.previewLast";
 export interface OverlayDescriptor {
   titleKey:
     | "setup.overlay.reward.title"
@@ -522,6 +524,7 @@ const descriptors: Record<OverlayLayoutKind, OverlayDescriptor> = {
     fields: REWARD_OVERLAY_FIELDS,
     labels: rewardLabels,
     variants: [
+      { value: "mixed", key: "rewardEditor.previewMixed" },
       { value: "rewards", key: "rewardEditor.previewRewards" },
       { value: "missing", key: "rewardEditor.previewMissing" },
       { value: "scanning", key: "overlay.riven.scanning" },
@@ -634,14 +637,12 @@ export function getOverlayDescriptor(kind: OverlayLayoutKind): OverlayDescriptor
 export function isOverlayField(kind: OverlayLayoutKind, value: unknown): value is string {
   return typeof value === "string" && descriptors[kind].fields.includes(value);
 }
+export const OVERLAY_FIELD_OFFSET_LIMIT = 10_000;
 export function normalizeOverlayFieldStyle(
-  kind: OverlayLayoutKind,
+  _kind: OverlayLayoutKind,
   value: unknown,
 ): OverlayFieldStyle {
   const raw = asRecord(value) ?? {};
-  const canvas = descriptors[kind].canvas;
-  // Keep offsets saved with the former, taller Arbitration canvas.
-  const maxY = kind === "arbiSummary" ? 440 : canvas.height;
   const bounded = (key: string, min: number, max: number, fallback: number): number => {
     const n = raw[key];
     return typeof n === "number" && Number.isFinite(n)
@@ -649,8 +650,8 @@ export function normalizeOverlayFieldStyle(
       : fallback;
   };
   return {
-    x: bounded("x", -canvas.width, canvas.width, 0),
-    y: bounded("y", -maxY, maxY, 0),
+    x: bounded("x", -OVERLAY_FIELD_OFFSET_LIMIT, OVERLAY_FIELD_OFFSET_LIMIT, 0),
+    y: bounded("y", -OVERLAY_FIELD_OFFSET_LIMIT, OVERLAY_FIELD_OFFSET_LIMIT, 0),
     scale: bounded("scale", 0.5, 3, 1),
     color: typeof raw.color === "string" && /^#[\da-f]{6}$/i.test(raw.color) ? raw.color : null,
     hidden: raw.hidden === true,

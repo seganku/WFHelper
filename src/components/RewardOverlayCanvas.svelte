@@ -10,16 +10,17 @@
     state: editState,
     onCommand,
     onCancel,
+    onContext,
   }: {
     state: OverlayEditState;
     onCommand: (command: OverlayEditCommand) => Promise<OverlayEditState | undefined>;
     onCancel: () => void;
+    onContext: (context: IpcInvokeMap["getOverlayPreview"]["return"]) => void;
   } = $props();
   const kind = $derived(editState.kind);
   const descriptor = $derived(getOverlayDescriptor(kind));
   let frame = $state<HTMLIFrameElement>();
   function selection() {
-    // The preview owns the selection before IPC acknowledges it.
     return (
       frame?.contentWindow as
         | (Window & { rewardEditorSelection?: { field?: string; select: (field: string) => void } })
@@ -36,6 +37,7 @@
     return true;
   }
   let context = $state<IpcInvokeMap["getOverlayPreview"]["return"]>();
+  const canvas = $derived(context?.canvas ?? descriptor.canvas);
   let width = $state(900);
   let failed = $state(false);
   let flushId = 0;
@@ -59,13 +61,11 @@
       frame?.contentWindow?.postMessage({ type: "reward-preview-flush", id }, "*");
     });
   }
-  // Preview zoom fits the logical canvas without changing saved field offsets.
   const scale = $derived(
-    Math.max(0.25, Math.min(1, (width - 48) / (descriptor.canvas.width * editState.scale))) *
-      editState.scale,
+    Math.max(0.25, Math.min(1, (width - 48) / (canvas.width * editState.scale))) * editState.scale,
   );
-  const previewWidth = $derived(descriptor.canvas.width * scale);
-  const previewHeight = $derived(descriptor.canvas.height * scale);
+  const previewWidth = $derived(canvas.width * scale);
+  const previewHeight = $derived(canvas.height * scale);
 
   function configure(): void {
     if (!frame?.contentWindow || !context) return;
@@ -85,6 +85,7 @@
       .then((next) => {
         if (!disposed && language === $locale) {
           context = next;
+          onContext(next);
           failed = false;
         }
       })
@@ -176,8 +177,8 @@
           sandbox="allow-scripts allow-same-origin"
           onload={configure}
           class="absolute left-0 top-0 origin-top-left border-0"
-          style:width={`${descriptor.canvas.width}px`}
-          style:height={`${descriptor.canvas.height}px`}
+          style:width={`${canvas.width}px`}
+          style:height={`${canvas.height}px`}
           style:transform={`scale(${scale})`}
         ></iframe>
       </div>

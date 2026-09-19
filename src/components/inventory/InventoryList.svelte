@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { showMasteredBadges, showOwnedParentBadges } from "../../stores/preferences.js";
+  import {
+    showMasteredBadges,
+    showOwnedParentBadges,
+    showVaultedBadges,
+  } from "../../stores/preferences.js";
   import { onDestroy } from "svelte";
 
   import ArchonShardPips from "../archon/ArchonShardPips.svelte";
@@ -27,17 +31,12 @@
 
   interface Props {
     items: InventoryViewItem[];
-    /** Unsliced result count; null means `items` is already the complete list. */
     totalCount: number | null;
-    /** Unsliced result list. The Owned header keys off it, so which sort it
-     *  offers cannot change as paging pulls more rows in. */
     allItems?: InventoryViewItem[] | null;
     showDucats: boolean;
-    /** Internal names the detail modal can actually open; null = no gating. */
     detailKeys: Set<string> | null;
     sortBy: SharedSortKey;
     sortDirection: SortDirection;
-    /** Sort keys the active tab can compute; anything else stays a plain header. */
     sortableKeys: ReadonlySet<string>;
     onSort: (patch: { sortBy: SharedSortKey; sortDirection: SortDirection }) => void;
     onSelect: (item: InventoryViewItem) => void;
@@ -45,7 +44,6 @@
     onVisible: (item: InventoryViewItem) => void;
     onMore: () => void;
     selectionMode?: boolean;
-    /** Selected/eligible keys are Sets so a paged table stays O(1) per row. */
     selectedKeys?: ReadonlySet<string> | null;
     eligibleKeys?: ReadonlySet<string> | null;
     onToggleSelect?: (item: InventoryViewItem, shiftKey: boolean) => void;
@@ -75,9 +73,6 @@
     INVENTORY_LIST_COLUMNS.filter((column) => showDucats || column.key !== "ducats"),
   );
 
-  // One observer for the whole table, not one per row: a page is 120 rows and
-  // the Everything tab pages through thousands. Plain Map/Set on purpose, since
-  // nothing renders from them and a reactive source per entry would only cost.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const rowItems = new Map<Element, InventoryViewItem>();
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -104,9 +99,6 @@
     rowItems.clear();
   });
 
-  // A row offered before the WFM catalog loaded is refused by the view, so its
-  // price cells stay blank until a remount. Offer every tracked row once more
-  // when the catalog arrives; the latch keeps later catalog writes from re-firing.
   let catalogSeen = false;
   $effect(() => {
     if (catalogSeen || Object.keys($wfmItems).length === 0) return;
@@ -132,8 +124,6 @@
     };
   }
 
-  // Fires once per sentinel node; the {#key} below remounts it after every
-  // extension so a viewport taller than one page keeps filling.
   function observeMore(node: HTMLElement): { destroy: () => void } {
     if (typeof IntersectionObserver === "undefined") return { destroy: () => {} };
     const io = new IntersectionObserver(
@@ -150,8 +140,6 @@
     ownedSortKeyFor((allItems ?? items).map((item) => item.inventoryGroup)),
   );
 
-  // Resolved here rather than in a template helper, so the header follows the
-  // rendered rows: a call from markup would not track these dependencies.
   const columnSortKeys = $derived(
     columns.map((column): SharedSortKey | null => {
       const sortKey = column.key === "owned" ? ownedSortKey : column.sortKey;
@@ -168,8 +156,6 @@
       if (isSelectable(item)) onToggleSelect(item, event?.shiftKey === true);
       return;
     }
-    // A card puts the modal behind its Details button and the order book behind
-    // the card body; a row is one target, so the modal wins where it exists.
     if (!detailKeys || detailKeys.has(item.internalName)) onExpand(item);
     else onSelect(item);
   }
@@ -208,9 +194,7 @@
       <p>{$t("inventory.noItemsFound")}</p>
     </div>
   {:else}
-    <!-- Separated borders on purpose: Chromium paints a collapsed table's borders
-         on the table, so a sticky header's bottom rule scrolls away from it. The
-         row rules move to the cells, which with zero spacing draw the same line. -->
+    <!-- Chromium paints a collapsed table's borders on the table, so a sticky header's bottom rule scrolls away from it. -->
     <table class="w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr class="text-left text-xs tracking-wide text-text-muted uppercase">
@@ -316,8 +300,6 @@
               </span>
             </td>
             <td class="border-b border-border/50 px-2 py-1">
-              <!-- The row click is a convenience; this button is what keyboard
-                   users reach, so it carries the same action. -->
               <button
                 type="button"
                 class="block text-left font-semibold hover:text-accent {item.isPrime
@@ -333,7 +315,7 @@
               </button>
               <span class="flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted">
                 <span>{item.categoryLabel}</span>
-                {#if item.vaulted}<span
+                {#if $showVaultedBadges && item.vaulted}<span
                     class="vault-badge vault-badge--inline"
                     title={$t("common.vaulted")}>V</span
                   >{/if}
@@ -346,6 +328,11 @@
                     class="detail-tag crafted"
                     data-item-mark="crafted"
                     title={$t("common.parentItemOwned")}>{$t("common.parentOwned")}</span
+                  >{/if}
+                {#if $showOwnedParentBadges && marks.foundry}<span
+                    class="detail-tag foundry"
+                    data-item-mark="foundry"
+                    title={$t("common.parentReadyToClaim")}>F</span
                   >{/if}
                 {#each shardCopies as copy, copyIndex (copy.instanceId ?? copyIndex)}
                   <ArchonShardPips
@@ -431,7 +418,6 @@
 </div>
 
 <style>
-  /* Pins under the header band, whose measured height InventoryHeader publishes. */
   .inventory-list th {
     position: sticky;
     top: var(--inventory-sticky-height, 0px);

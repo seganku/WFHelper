@@ -17,6 +17,14 @@
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "WFHelperWarframeWatcher"
     Delete "$APPDATA\WFHelper\warframe-watcher.json"
     Delete "$APPDATA\WFHelper\warframe-watcher.ps1"
+    Delete "$APPDATA\WFHelper\warframe-watcher-task.xml"
+    nsExec::Exec '"$SYSDIR\schtasks.exe" /Delete /TN "WFHelperWarframeWatcher" /F'
+    Pop $0
+    ReadEnvStr $0 "USERNAME"
+    ${If} $0 != ""
+      nsExec::Exec '"$SYSDIR\schtasks.exe" /Delete /TN "WFHelper\WarframeWatcher-$0" /F'
+      Pop $0
+    ${EndIf}
   ${EndIf}
 !macroend
 

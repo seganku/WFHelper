@@ -30,7 +30,12 @@ import {
   type WorkbenchSafetySnapshot,
 } from "../../../config/shared/tradeWorkbenchTypes.js";
 import { isWfmExcludedSlug } from "../../../config/shared/wfmExclusions.js";
-import { isActiveOrderStatus, normalizeSubtype } from "../../../config/shared/wfmOrders.js";
+import {
+  isActiveOrderStatus,
+  listingUnitPrice,
+  normalizePerTrade,
+  normalizeSubtype,
+} from "../../../config/shared/wfmOrders.js";
 import type { ItemDbEntry, MasteryData, ParsedItem } from "../../types/inventory.js";
 import type { WfmItemsLookup } from "../../types/ipc.js";
 import type { WfmOrder } from "../../types/market.js";
@@ -45,7 +50,6 @@ export type WorkbenchQueueWarning =
 interface WorkbenchMarketInfo {
   lowestSell: number | null;
   highestBuy: number | null;
-  /** Sellers currently ingame/online; the liquidity signal shown per row. */
   activeSellers: number;
   spread: number | null;
 }
@@ -59,15 +63,12 @@ export interface WorkbenchQueueRow {
   /** WFM subtype (relic refinement); null for items without one. */
   subtype: string | null;
   verdict: SafetyVerdict;
-  /** Units to list; starts at the safe count and never exceeds the total. */
   quantity: number;
-  /** Set by an explicit per-row confirmation; required beyond the safe count. */
   overrideAcknowledged: boolean;
   overrideAcknowledgedAt: number | null;
   selected: boolean;
-  existingOrder: { id: string; platinum: number; quantity: number } | null;
+  existingOrder: { id: string; platinum: number; quantity: number; perTrade: number } | null;
   market: WorkbenchMarketInfo | null;
-  /** Raw sell book kept on the row so strategies can be re-applied locally. */
   sellBook: readonly PricingListing[] | null;
   suggestion: PriceSuggestion | null;
   manualPrice: number | null;
@@ -83,8 +84,7 @@ function queueItemName(item: ParsedItem): string {
   return typeof item.name === "string" ? item.name : String(item.name ?? "");
 }
 
-/** Catalog-confirmed slugs only: a guessed slug cannot resolve to an item id at
- *  execution time, so it never enters the queue in the first place. */
+/** Catalog-confirmed slugs only: a guessed slug cannot resolve to an item id. */
 export function resolveQueueSlug(item: ParsedItem, lookup: WfmItemsLookup): string | null {
   const byRef = getLookupByGameRef(item.internalName, lookup);
   if (byRef?.url_name) return byRef.url_name;
@@ -97,11 +97,9 @@ interface SelectionSafetyInput {
   itemDb: Record<string, ItemDbEntry>;
   settings: InventorySafetySettings;
   mastery: MasteryData | null;
-  /** Mastery goal uniqueNames the user pinned in the planner. */
   pins: readonly string[];
   /** uniqueName -> owned copies, foundry claims already subtracted. */
   ownership?: ReadonlyMap<string, number>;
-  /** Products the foundry is building; each covers one copy of the demand. */
   buildingUniqueNames?: ReadonlySet<string>;
 }
 
@@ -111,8 +109,6 @@ interface MasteryIndex {
   owned: ReadonlySet<string>;
 }
 
-// Kept by payload identity so the safety engine's own memo still hits when only
-// a lock or a spare changed.
 let masteryIndexCache: MasteryIndex | null = null;
 
 function masteryIndex(mastery: MasteryData | null): MasteryIndex {
@@ -122,8 +118,7 @@ function masteryIndex(mastery: MasteryData | null): MasteryIndex {
   for (const item of mastery?.items ?? []) {
     const uniqueName = item.uniqueName || item.internalName;
     if (!uniqueName) continue;
-    // Ownership is its own field: mastered gear the player sold is gone, and
-    // reading the status instead would hold its parts back forever.
+    // Ownership is its own field: mastered gear the player sold is gone.
     if (item.currentlyOwned === true) owned.add(uniqueName);
     if (item.status === "mastered") mastered.add(uniqueName);
   }
@@ -131,12 +126,9 @@ function masteryIndex(mastery: MasteryData | null): MasteryIndex {
   return masteryIndexCache;
 }
 
-/** Shared by the grid's eligibility pass and the sell queue; feeding it mastery
- *  and pins keeps pinnedGoal/unmasteredRecipe from silently degrading. */
 export function buildSelectionSafetyContext(input: SelectionSafetyInput): SafetyContext {
   const { mastered: masteredUniqueNames, owned: ownedUniqueNames } = masteryIndex(input.mastery);
 
-  // Same part list as the recipe rule, so a pinned goal never reserves a resource.
   const pinnedRequirements = new Map<string, number>();
   for (const pin of input.pins) {
     for (const part of reservableParts(input.itemDb, pin)) {
@@ -181,7 +173,6 @@ export function relicSubtypeFor(item: ParsedItem, resolve?: RelicQualityResolver
   return match ? match[1].toLowerCase() : "intact";
 }
 
-/** Pure; market data attaches later. */
 export function buildQueueRows(
   items: readonly ParsedItem[],
   context: SafetyContext,
@@ -217,15 +208,12 @@ export function buildQueueRows(
   return rows;
 }
 
-/** Mirrors the id `buildBaseInventoryItems` puts on an inventory row, so a card
- *  the user ticked joins the queue rows built from the same ParsedItem. */
+/** Mirrors the id `buildBaseInventoryItems` puts on an inventory row. */
 export function selectionKeyFor(item: ParsedItem): string {
   const key = item.inventoryKey;
   return typeof key === "string" && key.trim().length > 0 ? key : item.internalName;
 }
 
-/** Inventory keys the queue would accept, for the grid's per-row eligibility
- *  check. Built from `buildQueueRows` so there is one definition of sellable. */
 export function eligibleSelectionKeys(
   items: readonly ParsedItem[],
   context: SafetyContext,
@@ -238,8 +226,6 @@ export function eligibleSelectionKeys(
   return keys;
 }
 
-/** Queue rows for ticked inventory only; every rank row of a selected item comes
- *  through since they share its selection key, and each starts ticked already. */
 export function buildSelectedQueueRows(
   items: readonly ParsedItem[],
   context: SafetyContext,
@@ -254,14 +240,11 @@ export function buildSelectedQueueRows(
   }));
 }
 
-/** Stable across rebuilds, unlike `rowId`, which is the build-order index. One
- *  selection key can expand to several rank rows, so the rank is part of it. */
 function queueRowIdentity(row: WorkbenchQueueRow): string {
   return `${selectionKeyFor(row.item)}::${row.slug}::${row.rank ?? ""}::${row.subtype ?? ""}`;
 }
 
-/** Carries a prior row's fetched market data and price edits onto its freshly
- *  built counterpart. The safety verdict is always the fresh one. */
+/** The safety verdict is always the fresh one. */
 function carryQueueRow(prior: WorkbenchQueueRow, fresh: WorkbenchQueueRow): WorkbenchQueueRow {
   const merged = setRowQuantity(
     {
@@ -291,8 +274,6 @@ function carryQueueRow(prior: WorkbenchQueueRow, fresh: WorkbenchQueueRow): Work
   };
 }
 
-/** Rebuilds the queue without discarding what the user already loaded: rows whose
- *  identity survived keep their order book, price and quantity; dropped rows fall away. */
 export function mergeQueueRows(
   previous: readonly WorkbenchQueueRow[],
   next: readonly WorkbenchQueueRow[],
@@ -305,8 +286,6 @@ export function mergeQueueRows(
   });
 }
 
-/** Strips fetched order-book data so an aged queue re-prices before it can execute.
- *  Quantities and typed prices are the user's own input and stay. */
 export function dropStaleMarketData(
   rows: readonly WorkbenchQueueRow[],
 ): readonly WorkbenchQueueRow[] {
@@ -333,13 +312,15 @@ function existingOrderOf(
   myOrders: readonly WfmOrder[],
 ): WorkbenchQueueRow["existingOrder"] {
   const existing = matchExistingOrder(row, myOrders);
-  return existing
-    ? { id: existing.id, platinum: existing.platinum, quantity: existing.quantity }
-    : null;
+  if (!existing) return null;
+  return {
+    id: existing.id,
+    platinum: existing.platinum,
+    quantity: existing.quantity,
+    perTrade: normalizePerTrade(existing.perTrade),
+  };
 }
 
-/** Re-joins rows to a freshly fetched own-order list, leaving the market data
- *  they already loaded alone; the retry after a failed orders fetch uses it. */
 export function attachExistingOrders(
   rows: readonly WorkbenchQueueRow[],
   myOrders: readonly WfmOrder[],
@@ -356,10 +337,9 @@ export function attachMarketData(
   let market: WorkbenchMarketInfo | null = null;
   if (sellBook) {
     const activeSell = sellBook.filter((entry) => isActiveOrderStatus(entry.status));
-    const lowestSell =
-      activeSell.length > 0 ? Math.min(...activeSell.map((e) => e.platinum)) : null;
+    const lowestSell = activeSell.length > 0 ? Math.min(...activeSell.map(listingUnitPrice)) : null;
     const activeBuy = (buyBook ?? []).filter((entry) => isActiveOrderStatus(entry.status));
-    const highestBuy = activeBuy.length > 0 ? Math.max(...activeBuy.map((e) => e.platinum)) : null;
+    const highestBuy = activeBuy.length > 0 ? Math.max(...activeBuy.map(listingUnitPrice)) : null;
     market = {
       lowestSell,
       highestBuy,
@@ -423,7 +403,6 @@ export async function loadQueueMarketData<T extends MarketLoadRow>(
     if (lastStartedAt != null) {
       const elapsed = now() - lastStartedAt;
       if (elapsed < interval) await wait(interval - elapsed);
-      // The gap can outlive the modal, so cancellation is re-read after it.
       if (options.isCancelled?.()) {
         summary.cancelled = true;
         break;
@@ -450,6 +429,7 @@ export function applyStrategy(
     {
       sellListings: row.sellBook,
       currentPrice: row.existingOrder?.platinum ?? null,
+      ownPerTrade: row.existingOrder?.perTrade ?? 1,
       ownUserName,
     },
     damping,
@@ -457,8 +437,8 @@ export function applyStrategy(
   return { ...row, suggestion };
 }
 
-/** Clamped to the account total; crossing the safe count clears any previous
- *  acknowledgement so protection has to be re-confirmed for the new amount. */
+/** Crossing the safe count clears any previous acknowledgement, so protection has
+ *  to be re-confirmed for the new amount. */
 export function setRowQuantity(row: WorkbenchQueueRow, quantity: number): WorkbenchQueueRow {
   const next = Math.max(0, Math.min(row.verdict.total, Math.floor(quantity)));
   const keepAck = row.overrideAcknowledged && next <= row.quantity;
@@ -493,8 +473,6 @@ interface QueueRowFilter {
   listed?: QueueListedFilter;
 }
 
-/** What a plat bound is measured against: the price the row would list at, and
- *  the cheapest competing listing while the user has priced nothing yet. */
 function queueFilterPrice(row: WorkbenchQueueRow): number | null {
   return effectivePrice(row) ?? row.market?.lowestSell ?? null;
 }
@@ -509,8 +487,8 @@ function matchesQueueListed(row: WorkbenchQueueRow, listed: QueueListedFilter): 
   return listed === "listed" ? row.existingOrder != null : row.existingOrder == null;
 }
 
-/** Every matching row, uncapped (the display cap belongs to the view). A filter
- *  never touches `selected`, so a hidden ticked row still goes out with the plan. */
+/** A filter never touches `selected`, so a hidden ticked row still goes out with
+ *  the plan. */
 export function filterQueueRows(
   rows: readonly WorkbenchQueueRow[],
   filter: QueueRowFilter = {},
@@ -526,8 +504,6 @@ export function filterQueueRows(
   );
 }
 
-/** Rows a plat bound drops for having no price yet. Shown next to the bounds so
- *  an empty list reads as unloaded market data rather than as no matches. */
 export function unpricedHiddenCount(
   rows: readonly WorkbenchQueueRow[],
   filter: QueueRowFilter = {},
@@ -554,8 +530,8 @@ export function bindingReasonKeys(verdict: SafetyVerdict): string[] {
     .map((reservation) => reservation.reasonKey);
 }
 
-/** Selected rows the user still has to price. Execute stays blocked while any
- *  exists, so a strategy that priced nothing cannot go out as a partial run. */
+/** Execute stays blocked while any exists, so a strategy that priced nothing
+ *  cannot go out as a partial run. */
 export function unpricedSelectedRows(rows: readonly WorkbenchQueueRow[]): WorkbenchQueueRow[] {
   return rows.filter((row) => row.selected && row.quantity > 0 && effectivePrice(row) == null);
 }
@@ -572,7 +548,6 @@ function executableRows(rows: readonly WorkbenchQueueRow[]): WorkbenchQueueRow[]
 
 interface WorkbenchPlanBuild {
   plan: WorkbenchPlan;
-  /** True when the selection exceeds the per-run cap; nothing was truncated. */
   overCap: boolean;
 }
 
@@ -634,7 +609,6 @@ export function captureSafetySnapshot(
   return snapshot;
 }
 
-/** Stable key for per-item safety settings (locks, spares). */
 export function rowSafetyKey(row: WorkbenchQueueRow): string {
   return safetyKeyFor(row.item);
 }

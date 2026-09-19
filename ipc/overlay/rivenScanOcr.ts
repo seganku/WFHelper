@@ -25,6 +25,7 @@ import {
   type RivenParseDiagnostics,
   type RivenStat,
 } from "./rivenScanText";
+import { loadSharp } from "../../services/sharpRuntime";
 
 const log = withScope("rivenScan");
 export const MIN_ACCEPTABLE_RIVEN_STATS = 2;
@@ -149,7 +150,7 @@ export async function recognizeRivenCardStats(
     return { text: "", titleText: "", footerText: "", stats: [], lowConfidence: false };
   }
 
-  const sharp = require("sharp") as (typeof import("sharp"))["default"];
+  const sharp = loadSharp();
   let fallbackCrop: RivenFallbackCrop | null | undefined;
   let bestResult: RivenOcrResult | null = null;
   let bestStats: RivenStat[] = [];

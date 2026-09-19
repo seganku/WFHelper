@@ -47,6 +47,35 @@ interface RelicEraCandidate {
   ocrVariant: string | null;
 }
 
+const MIN_ERA_OCR_ATTEMPT_MS = 900;
+
+interface EraOcrBudget {
+  peek(): number | null;
+  take(): number | null;
+}
+
+function createEraOcrBudget(
+  startedAt: number,
+  timeoutMs: number,
+  ocrTimeoutMs: number,
+): EraOcrBudget {
+  let attempts = 0;
+  const peek = (): number | null => {
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) return null;
+    if (attempts > 0 && remainingMs < MIN_ERA_OCR_ATTEMPT_MS) return null;
+    return Math.min(ocrTimeoutMs, remainingMs);
+  };
+  return {
+    peek,
+    take: (): number | null => {
+      const attemptMs = peek();
+      if (attemptMs != null) attempts += 1;
+      return attemptMs;
+    },
+  };
+}
+
 function emptyCandidate(): RelicEraCandidate {
   return {
     era: null,
@@ -75,14 +104,17 @@ async function runVariantOcr(
     runOCRBuffer: (buffer: Buffer, timeoutMs: number) => Promise<string>;
   },
 ): Promise<string> {
+  const deadlineAt = Date.now() + timeoutMs;
   const pngBuffer: Buffer = variantImage.toPNG();
   try {
     return await ocr.runOCRBuffer(pngBuffer, timeoutMs);
   } catch {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) throw new Error("era OCR attempt budget spent");
     const tempPath = buildTempImagePath(SCANNER_TUNING.paths.tempImage, label);
     fs.writeFileSync(tempPath, pngBuffer);
     try {
-      return await ocr.runOCR(tempPath, timeoutMs);
+      return await ocr.runOCR(tempPath, remainingMs);
     } finally {
       try {
         fs.unlinkSync(tempPath);
@@ -102,9 +134,7 @@ function textPreview(ocrText: string): string {
 
 async function scanFilterLabel(
   screenshot: CaptureResult,
-  timeoutMs: number,
-  perAttemptTimeoutMs: number,
-  startedAt: number,
+  budget: EraOcrBudget,
   ocr: {
     runOCR: (imagePath: string, timeoutMs: number) => Promise<string>;
     runOCRBuffer: (buffer: Buffer, timeoutMs: number) => Promise<string>;
@@ -113,6 +143,7 @@ async function scanFilterLabel(
   let best = emptyCandidate();
 
   for (const rect of RELIC_ERA_FILTER_LABEL_RECTS) {
+    if (budget.peek() === null) break;
     await yieldToEventLoop();
     let cropped: NativeImage;
     try {
@@ -123,13 +154,14 @@ async function scanFilterLabel(
 
     const variants = buildOcrVariants(cropped);
     for (const variant of variants) {
-      if (Date.now() - startedAt >= timeoutMs) break;
+      const attemptMs = budget.take();
+      if (attemptMs === null) break;
 
       let ocrText: string;
       try {
         ocrText = await runVariantOcr(
           variant.image,
-          perAttemptTimeoutMs,
+          attemptMs,
           `era-${rect.id}-${variant.id}`,
           ocr,
         );
@@ -161,9 +193,7 @@ async function scanFilterLabel(
 
 async function scanTileLabels(
   screenshot: CaptureResult,
-  timeoutMs: number,
-  perAttemptTimeoutMs: number,
-  startedAt: number,
+  budget: EraOcrBudget,
   ocr: {
     runOCR: (imagePath: string, timeoutMs: number) => Promise<string>;
     runOCRBuffer: (buffer: Buffer, timeoutMs: number) => Promise<string>;
@@ -172,6 +202,7 @@ async function scanTileLabels(
   let best = emptyCandidate();
 
   for (const rect of RELIC_ROW_TILE_LABEL_RECTS) {
+    if (budget.peek() === null) break;
     await yieldToEventLoop();
     let cropped: NativeImage;
     try {
@@ -182,13 +213,14 @@ async function scanTileLabels(
 
     const variants = buildOcrVariants(cropped);
     for (const variant of variants) {
-      if (Date.now() - startedAt >= timeoutMs) break;
+      const attemptMs = budget.take();
+      if (attemptMs === null) break;
 
       let ocrText: string;
       try {
         ocrText = await runVariantOcr(
           variant.image,
-          perAttemptTimeoutMs,
+          attemptMs,
           `era-${rect.id}-${variant.id}`,
           ocr,
         );
@@ -220,9 +252,7 @@ async function scanTileLabels(
 
 async function scanHeaderBands(
   screenshot: CaptureResult,
-  timeoutMs: number,
-  perAttemptTimeoutMs: number,
-  startedAt: number,
+  budget: EraOcrBudget,
   ocr: {
     runOCR: (imagePath: string, timeoutMs: number) => Promise<string>;
     runOCRBuffer: (buffer: Buffer, timeoutMs: number) => Promise<string>;
@@ -231,6 +261,7 @@ async function scanHeaderBands(
   let best = emptyCandidate();
 
   for (const band of RELIC_ERA_BANDS) {
+    if (budget.peek() === null) break;
     await yieldToEventLoop();
     let cropped: NativeImage;
     try {
@@ -241,16 +272,12 @@ async function scanHeaderBands(
 
     const variants = buildOcrVariants(cropped);
     for (const variant of variants) {
-      if (Date.now() - startedAt >= timeoutMs) break;
+      const attemptMs = budget.take();
+      if (attemptMs === null) break;
 
       let ocrText: string;
       try {
-        ocrText = await runVariantOcr(
-          variant.image,
-          perAttemptTimeoutMs,
-          `era-band-${variant.id}`,
-          ocr,
-        );
+        ocrText = await runVariantOcr(variant.image, attemptMs, `era-band-${variant.id}`, ocr);
       } catch {
         continue;
       }
@@ -310,33 +337,22 @@ export async function detectRelicSelectionEra(
     };
   }
 
-  const perAttemptTimeoutMs = Math.max(900, Math.min(scanSettings.ocrTimeoutMs, timeoutMs));
+  const ocrTimeoutMs = Math.max(MIN_ERA_OCR_ATTEMPT_MS, scanSettings.ocrTimeoutMs);
+  const budget = createEraOcrBudget(startedAt, timeoutMs, ocrTimeoutMs);
 
   // Filter-tab label first: omnia pick screens open Lith-first, so tile labels
   // confidently read the wrong era there. A confident label hit is final.
-  let best = await scanFilterLabel(screenshot, timeoutMs, perAttemptTimeoutMs, startedAt, ocr);
+  let best = await scanFilterLabel(screenshot, budget, ocr);
 
   // labelOnly: recheck pass while a mission tag is already known - tile/band
   // text must not masquerade as a label there, so skip the fallbacks entirely.
   if (!options.labelOnly && best.confidence < 0.9) {
-    const tileBest = await scanTileLabels(
-      screenshot,
-      timeoutMs,
-      perAttemptTimeoutMs,
-      startedAt,
-      ocr,
-    );
+    const tileBest = await scanTileLabels(screenshot, budget, ocr);
     if (tileBest.confidence > best.confidence) best = tileBest;
   }
 
   if (!options.labelOnly && best.confidence < 0.9) {
-    const headerBest = await scanHeaderBands(
-      screenshot,
-      timeoutMs,
-      perAttemptTimeoutMs,
-      startedAt,
-      ocr,
-    );
+    const headerBest = await scanHeaderBands(screenshot, budget, ocr);
     if (headerBest.confidence > best.confidence) best = headerBest;
   }
 

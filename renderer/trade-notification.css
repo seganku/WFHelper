@@ -21,7 +21,12 @@ body {
   gap: 10px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-surface, #0f1420) 92%, transparent);
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--bg-surface, #0f1420) 92%, transparent)
+      var(--overlay-opacity-current, 100%),
+    transparent
+  );
   border: 1px solid var(--border-strong, rgba(212, 168, 67, 0.4));
   backdrop-filter: blur(12px);
   opacity: 1;

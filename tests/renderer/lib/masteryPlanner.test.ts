@@ -8,7 +8,9 @@ import {
   groupPlannedItems,
   missingOnly,
   plannerModalTarget,
+  plannerPartState,
   sortPlannedItems,
+  unfinishedParts,
   type PlannedItem,
   type PlannerPin,
 } from "../../../src/lib/masteryPlanner.js";
@@ -64,8 +66,6 @@ describe("mastery planner aggregation", () => {
     expect(totalFor(plan, FERRITE)).toEqual({ needed: 5000, owned: 4000, missing: 1000 });
     expect(plan.totalCredits).toBe(20_000);
 
-    // The pool is handed out in plan order, so the rows add up to the total
-    // instead of showing two covered bars above one short total.
     const rowFor = (index: number) =>
       plan.items[index].resources.find((row) => row.uniqueName === FERRITE);
     expect(rowFor(0)).toMatchObject({ needed: 3000, owned: 3000, missing: 0 });
@@ -94,7 +94,6 @@ describe("mastery planner aggregation", () => {
       new Map([[FERRITE, 900]]),
     );
 
-    // The row shows the share this pin uses; the total still reports the pile.
     expect(plan.items[0].resources[0]).toMatchObject({ needed: 100, owned: 100, missing: 0 });
     expect(totalFor(plan, FERRITE)).toEqual({ needed: 100, owned: 900, missing: 0 });
   });
@@ -229,6 +228,148 @@ describe("mastery planner ownership rules", () => {
     expect(plan.items[0].craftableNow).toBe(false);
     expect(plan.craftableCount).toBe(0);
   });
+
+  it("leaves a set whose parts are only blueprints short of ready", () => {
+    const chassis = "/Lotus/Types/Recipes/WarframeRecipes/AlphaChassisComponent";
+    const chassisBp = "/Lotus/Types/Recipes/WarframeRecipes/AlphaChassisBlueprint";
+    const db: Record<string, ItemDbEntry> = {
+      "/Lotus/Powersuits/Alpha": entry("Alpha", {
+        buildPrice: 0,
+        buildTime: 0,
+        num: 1,
+        ingredients: [{ uniqueName: chassis, count: 1 }],
+      }),
+      [chassis]: {
+        ...entry("Alpha Chassis", {
+          blueprintUniqueName: chassisBp,
+          buildPrice: 0,
+          buildTime: 0,
+          num: 1,
+          ingredients: [{ uniqueName: FERRITE, count: 900 }],
+        }),
+        isBuildComponent: true,
+      },
+      [FERRITE]: entry("Ferrite"),
+    };
+    const planFor = (ownership: Map<string, number>) =>
+      buildMasteryPlan([pin("/Lotus/Powersuits/Alpha", "Alpha")], db, ownership).items[0];
+
+    const held = planFor(new Map([[chassisBp, 1]]));
+    expect(held.components[0]).toMatchObject({
+      owned: 1,
+      missing: 0,
+      built: 0,
+      state: "blueprint",
+    });
+    expect(held.craftableNow).toBe(false);
+    expect(held.completeness).toBe(0);
+
+    const built = planFor(new Map([[chassis, 1]]));
+    expect(built.components[0]).toMatchObject({ owned: 1, built: 1, state: "owned" });
+    expect(built.craftableNow).toBe(true);
+    expect(built.completeness).toBe(1);
+
+    expect(planFor(new Map()).components[0]).toMatchObject({
+      owned: 0,
+      built: 0,
+      missing: 1,
+      state: "missing",
+    });
+  });
+
+  it("keeps a raw material with its own recipe out of the blueprint state", () => {
+    const reactor = "/Lotus/Types/Recipes/Components/OrokinReactor";
+    const reactorBp = `${reactor}Blueprint`;
+    const db: Record<string, ItemDbEntry> = {
+      "/Lotus/Weapons/Alpha": entry("Alpha", {
+        buildPrice: 0,
+        buildTime: 0,
+        num: 1,
+        ingredients: [{ uniqueName: reactor, count: 1 }],
+      }),
+      [reactor]: entry("Orokin Reactor", {
+        blueprintUniqueName: reactorBp,
+        buildPrice: 0,
+        buildTime: 0,
+        num: 1,
+        ingredients: [{ uniqueName: FERRITE, count: 900 }],
+      }),
+      [reactorBp]: entry("Orokin Reactor Blueprint"),
+      [FERRITE]: entry("Ferrite"),
+    };
+
+    const planned = buildMasteryPlan(
+      [pin("/Lotus/Weapons/Alpha", "Alpha")],
+      db,
+      new Map([[reactorBp, 1]]),
+    ).items[0];
+
+    expect(planned.components[0]).toMatchObject({
+      uniqueName: reactor,
+      missing: 0,
+      state: "owned",
+    });
+    expect(unfinishedParts(planned.components)).toEqual([]);
+  });
+
+  it("stays ready when the only held blueprint is the item's own", () => {
+    const frameBp = "/Lotus/Types/Recipes/WarframeRecipes/AlphaBlueprint";
+    const chassis = "/Lotus/Types/Recipes/WarframeRecipes/AlphaChassisComponent";
+    const db: Record<string, ItemDbEntry> = {
+      "/Lotus/Powersuits/Alpha": entry("Alpha", {
+        blueprintUniqueName: frameBp,
+        buildPrice: 0,
+        buildTime: 0,
+        num: 1,
+        ingredients: [{ uniqueName: chassis, count: 1 }],
+      }),
+      [frameBp]: entry("Alpha Blueprint"),
+      [chassis]: { ...entry("Alpha Chassis"), isBuildComponent: true },
+    };
+
+    const planned = buildMasteryPlan(
+      [pin("/Lotus/Powersuits/Alpha", "Alpha")],
+      db,
+      new Map([
+        [frameBp, 1],
+        [chassis, 1],
+      ]),
+    ).items[0];
+
+    expect(planned.components.map((comp) => comp.state)).toEqual(["blueprint", "owned"]);
+    expect(planned.components.map(plannerPartState)).toEqual(["owned", "owned"]);
+    expect(planned.craftableNow).toBe(true);
+    expect(planned.completeness).toBe(1);
+  });
+
+  it("marks a held main blueprint as blueprint, not as done", () => {
+    const frameBp = "/Lotus/Types/Recipes/WarframeRecipes/AlphaBlueprint";
+    const db: Record<string, ItemDbEntry> = {
+      "/Lotus/Powersuits/Alpha": entry("Alpha", {
+        blueprintUniqueName: frameBp,
+        buildPrice: 0,
+        buildTime: 0,
+        num: 1,
+        ingredients: [{ uniqueName: FERRITE, count: 100 }],
+      }),
+      [frameBp]: entry("Alpha Blueprint"),
+      [FERRITE]: entry("Ferrite"),
+    };
+
+    const plan = buildMasteryPlan(
+      [pin("/Lotus/Powersuits/Alpha", "Alpha")],
+      db,
+      new Map([[frameBp, 1]]),
+    );
+    const blueprint = plan.items[0].components.find((comp) => comp.uniqueName === frameBp);
+
+    expect(blueprint).toMatchObject({
+      isBlueprint: true,
+      missing: 0,
+      built: 1,
+      state: "blueprint",
+    });
+  });
 });
 
 describe("mastery planner recipe walking", () => {
@@ -259,7 +400,6 @@ describe("mastery planner recipe walking", () => {
     expect(totalFor(plan, FERRITE).needed).toBe(900);
     expect(totalFor(plan, PLASTIDS).needed).toBe(220);
     expect(plan.totalCredits).toBe(40_000);
-    // The chassis stays a component chip and never doubles as a material row.
     expect(plan.totals.some((row) => row.uniqueName === chassis)).toBe(false);
     expect(plan.items[0].components[0].uniqueName).toBe(chassis);
   });
@@ -313,7 +453,6 @@ describe("mastery planner recipe walking", () => {
 
     const plan = buildMasteryPlan([pin("/Lotus/Weapons/Alpha", "Alpha")], db, new Map());
 
-    // Four widgets are two runs of a yield-2 recipe, not four.
     expect(totalFor(plan, FERRITE).needed).toBe(200);
     expect(plan.totalCredits).toBe(2000);
   });
@@ -347,8 +486,6 @@ describe("mastery planner recipe walking", () => {
   });
 
   it("needs one reusable blueprint no matter how many runs a part takes", () => {
-    // A name the alias rule cannot fold into the part, or the tree drops the
-    // blueprint child as the same owned pile.
     const widget = "/Lotus/Types/Recipes/Components/Gizmo";
     const widgetBp = "/Lotus/Types/Recipes/Components/GizmoConstructionBlueprint";
     const db: Record<string, ItemDbEntry> = {
@@ -377,7 +514,6 @@ describe("mastery planner recipe walking", () => {
     );
 
     expect(totalFor(plan, FERRITE).needed).toBe(20);
-    // Two runs, but a reusable blueprint is still only wanted once.
     expect(totalFor(plan, widgetBp).needed).toBe(1);
   });
 
@@ -399,10 +535,8 @@ describe("mastery planner recipe walking", () => {
       new Map([[FERRITE, 4000]]),
     );
 
-    // Ferrite belongs under materials only; a chip for it repeats the row below.
     expect(short.items[0].components).toEqual([]);
     expect(short.items[0].resources.map((row) => row.uniqueName)).toEqual([FERRITE]);
-    // Dropping the chip must not turn an unaffordable build into a ready one.
     expect(short.items[0].completeness).toBe(0);
     expect(short.items[0].craftableNow).toBe(false);
     expect(stocked.items[0].completeness).toBe(1);
@@ -436,7 +570,6 @@ describe("mastery planner recipe walking", () => {
       new Map([[widgetBp, 1]]),
     );
 
-    // Three runs need three blueprints; the one owned copy covers one of them.
     const row = plan.items[0].resources.find((entryRow) => entryRow.uniqueName === widgetBp);
     expect(row).toMatchObject({ needed: 3, owned: 1, missing: 2 });
     expect(totalFor(plan, widgetBp)).toEqual({ needed: 3, owned: 1, missing: 2 });
@@ -500,7 +633,6 @@ describe("mastery planner detail targets", () => {
     expect(target.parentName).toBe("Braton Prime");
     expect(target.comp).toMatchObject({ uniqueName: receiver, itemCount: 2, ownedCount: 1 });
     expect(target.comp.owned).toBe(false);
-    // The modal joins parent and component, so the planner must not pre-join them.
     expect(
       resolveComponentPriceLookup(target.comp, target.parentName, targetDb[receiver], lookup).name,
     ).toBe("Braton Prime Receiver");
@@ -595,8 +727,6 @@ describe("mastery planner sorting", () => {
       plannedItem({ name: "Zeta", masteryXpRemaining: 6000 }),
       plannedItem({ name: "Alpha", masteryXpRemaining: 100, craftableNow: true }),
       plannedItem({ name: "Beta", masteryXpRemaining: 900, craftableNow: true }),
-      // A pin with no recipe reads as craftable in the data, so the group guard
-      // has to check both flags.
       plannedItem({ name: "Gamma", craftableNow: true, hasRecipe: false }),
     ];
 
@@ -617,6 +747,17 @@ describe("mastery planner missing filter", () => {
 
     expect(missingOnly(rows).map((row) => row.uniqueName)).toEqual(["a", "c"]);
     expect(missingOnly([{ uniqueName: "b", missing: 0 }])).toEqual([]);
+  });
+
+  it("keeps a covered part listed while only its blueprint is held", () => {
+    const rows = [
+      { uniqueName: "built", missing: 0, state: "owned" as const },
+      { uniqueName: "held", missing: 0, state: "blueprint" as const },
+      { uniqueName: "short", missing: 1, state: "blueprint" as const },
+      { uniqueName: "gone", missing: 1, state: "missing" as const },
+    ];
+
+    expect(unfinishedParts(rows).map((row) => row.uniqueName)).toEqual(["held", "short", "gone"]);
   });
 });
 

@@ -194,6 +194,11 @@ test("Baro plans a combined basket, preserves wishes and separates recorded pric
       await openView(page, "settings");
       await openPlanner();
     }
+    // The load starts when the World view mounts and disables the button for the 30s
+    // cooldown in stores/baro.ts. A paused clock stops that cooldown from draining
+    // while it is asserted; fastForward below runs the timers suspended with it.
+    await page.clock.install();
+    await page.clock.pauseAt(Date.now() + 1_000);
     await openPlanner();
     const panel = page.locator("[data-baro-planner]");
     await expect
@@ -207,7 +212,6 @@ test("Baro plans a combined basket, preserves wishes and separates recorded pric
       .toBeGreaterThan(0);
     await expect(panel.locator("[data-baro-refresh]")).toBeDisabled();
     await expect(panel.locator("[data-baro-error]")).toHaveCount(0);
-    await page.clock.install();
     const requests = await page.evaluate(
       () =>
         (window as unknown as { baroHistoryFixtureRequests: number }).baroHistoryFixtureRequests,
@@ -238,6 +242,7 @@ test("Baro plans a combined basket, preserves wishes and separates recorded pric
       .toBe(requests + 1);
     await expect(panel.locator("[data-baro-refresh]")).toBeDisabled();
     await expect(panel.locator("[data-baro-error]")).toHaveCount(0);
+    await page.clock.resume();
     const row = (uniqueName: string) => panel.locator(`[data-baro-row="${uniqueName}"]`);
     const quantity = (uniqueName: string) => panel.locator(`[data-baro-quantity="${uniqueName}"]`);
     const ducatBudget = panel.locator('[data-baro-budget="ducats"]');

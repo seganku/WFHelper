@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PATREON_URL } from "../../config/links.js";
+  import { DISCORD_URL, PATREON_URL } from "../../config/links.js";
   import { tr } from "../../lib/i18n.js";
   import { send } from "../../lib/ipc.js";
   import SettingsSection from "./SettingsSection.svelte";
@@ -51,7 +51,7 @@
     { label: $tr("settings.creditWebsite"), url: "https://wfhelper.com", text: "wfhelper.com" },
     {
       label: $tr("settings.creditCommunity"),
-      url: "https://discord.gg/7Gm3UvUSww",
+      url: DISCORD_URL,
       text: $tr("settings.creditCommunityValue"),
     },
   ]);
@@ -83,11 +83,6 @@
     <div class="settings-credit-row">
       <span>{$tr("settings.creditSupport")}</span>
       <span class="flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1">
-        <button
-          class="settings-link"
-          onclick={() => openLink("https://github.com/sponsors/MrZockerator")}
-          >&hearts; {$tr("settings.creditSponsors")}</button
-        >
         <button class="settings-link" onclick={() => openLink(PATREON_URL)}>Patreon</button>
       </span>
     </div>

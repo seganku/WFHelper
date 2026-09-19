@@ -4,6 +4,7 @@ import { clamp01, computeMeanAndStd, luminanceFromBgr } from "./rewardScannerUti
 import { clampNumber } from "../config/shared/numeric";
 import { REFERENCE_WARFRAME_UI_SCALE } from "../config/runtime/overlaySettings";
 import { normalizeErrorMessage } from "../config/shared/errors";
+import { loadSharp } from "./sharpRuntime";
 
 const log = withScope("rewardScanner");
 
@@ -938,7 +939,7 @@ export async function binarizeRewardRegion(
   heightFrac: number,
 ): Promise<Buffer | null> {
   try {
-    const sharp: (typeof import("sharp"))["default"] = require("sharp");
+    const sharp = loadSharp();
     const meta = await sharp(pngBuffer).metadata();
     const srcW = meta.width ?? 0;
     const srcH = meta.height ?? 0;

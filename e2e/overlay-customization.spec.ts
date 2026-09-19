@@ -73,14 +73,19 @@ test("planner reward details stay inside crowded recommendation cards", async ()
       for (const scale of [1, 0.8]) {
         await evaluateInMain(
           harness.app,
-          ({ BrowserWindow }, payload) => {
+          ({ app, BrowserWindow }, payload) => {
             const window = BrowserWindow.getAllWindows().find((candidate) =>
               candidate.webContents.getURL().includes("mode=planner"),
             );
             if (!window) throw new Error("Planner window did not mount");
             window.setSize(510, 705);
             window.webContents.setZoomFactor(payload.scale);
-            window.showInactive();
+            const load = process
+              .getBuiltinModule("module")
+              .createRequire(`${app.getAppPath()}/.electron-build/main.js`);
+            (
+              load("./ipc/rewardOverlayIpc.js") as typeof import("../ipc/rewardOverlayIpc")
+            ).plannerWindowsController.showOverlayWindowInactive();
             window.webContents.send("relic-planner-trigger");
             window.webContents.send("relic-recommendations", { era: "Lith", rows: payload.rows });
             window.webContents.send("overlay-edit-state", payload.state);

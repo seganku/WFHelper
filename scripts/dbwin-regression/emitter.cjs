@@ -1,6 +1,7 @@
 // Replays the DBWIN handshake on private objects so other readers cannot consume it.
 // argv: [koffiMainPath, matchingSendCount, dbwinPrefix]
 
+const fs = require("fs");
 const koffi = require(process.argv[2]);
 
 const kernel32 = koffi.load("kernel32.dll");
@@ -46,6 +47,17 @@ const waitForReader = setInterval(() => {
   }
 }, POLL_MS);
 
+// Leave a writer in the state OutputDebugString blocks in: the ack consumed and
+// no further message sent, so only the reader's teardown can release it. Writes
+// are synchronous because the wait below would hold a buffered pipe.
+function parkBlockedWriter(ready) {
+  WaitForSingleObject(ready, 10_000);
+  fs.writeSync(1, "EMITTER_PARKED\n");
+  const parkedAt = Date.now();
+  const rc = WaitForSingleObject(ready, 12_000);
+  fs.writeSync(1, `BLOCKED_WAIT_MS=${Date.now() - parkedAt} rc=${rc}\n`);
+}
+
 function sendAll() {
   const mapping = OpenFileMappingW(FILE_MAP_WRITE, 0, `${prefix}_BUFFER`);
   const ready = OpenEventW(SYNCHRONIZE, 0, `${prefix}_BUFFER_READY`);
@@ -72,6 +84,7 @@ function sendAll() {
     console.log(`[emitter] cycle ${cycle}/${MATCHING_SENDS}`);
     if (cycle >= MATCHING_SENDS) {
       clearInterval(t);
+      parkBlockedWriter(ready);
       UnmapViewOfFile(view);
       for (const handle of [mapping, ready, data]) CloseHandle(handle);
       console.log("EMITTER_DONE");

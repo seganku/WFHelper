@@ -55,6 +55,16 @@ To check a reward scan:
 
 To reposition an overlay later, use the unlock hotkey shown on it.
 
+## Customize overlay contents
+
+Open **Settings > Customization** and select **Customize** beside an overlay. Select a field in the preview or the element list, then drag it or adjust its offset, size, color and visibility. Arrow keys move the selected preview field by one pixel; hold Shift for ten pixels. Select **Save** to keep the layout, or **Cancel** to leave it unchanged.
+
+The reward editor starts with **Mixed rewards**, including a long item name, three-digit prices and cards with different numbers of set parts. **Reward cards** shows six parts per card. After a completed reward scan, **Last reward screen** previews that screen with its captured prices and ownership state. This preview is kept only until WFHelper closes.
+
+The preview follows the reward window's size. The live window grows to fit its content until you manually resize it; dragging it to a different position does not disable automatic height. Large part counts keep their full value in the hover tooltip.
+
+Use **Appearance > Style > Overlay opacity** to adjust overlay backgrounds while keeping text visible. Expand **Customize each overlay** to set separate values for rewards, the relic planner, each Riven panel, the arbitration summary, and trade notifications. Reset an individual value to follow the shared opacity again. Custom CSS applies to the main app, not overlay windows.
+
 ## Linux setup
 
 Run Warframe through Steam with Proton. For faster detection of overlay events, add `PROTON_LOG=1 %command%` to Warframe's **Properties > Launch Options**, then restart the game. The setup wizard also provides this string to copy.
@@ -71,6 +81,7 @@ Overlays work on X11, XWayland and native Wayland. On native Wayland they use th
 - **JSON rejected:** choose an inventory export, rather than a stats or trade-history export.
 - **Items or quantities look old:** check the selected source and allow for the helper cooldown. Imported files need a newer export to reflect later changes.
 - **Overlay cannot read a reward:** confirm the game's English interface, check screen-share permission on Linux, and follow any OCR hint shown by the app. If a scan-debug bundle was created, **Settings > General > Open scan-debug folder** opens it.
+- **Overlay fields overlap or look too small:** open [Customize overlay contents](#customize-overlay-contents), try the mixed preview and reset the affected field or layout.
 
 Report persistent problems through [GitHub Issues](https://github.com/WFHelper/wfhelper/issues) or [Discord](https://discord.gg/7Gm3UvUSww). Include your app version, operating system, inventory source, and exact error. Check logs and screenshots for personal information before sharing them.
 

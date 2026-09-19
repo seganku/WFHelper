@@ -1,7 +1,11 @@
 <script lang="ts">
   import ThemedPanel from "../ThemedPanel.svelte";
   import { locale, tr } from "../../lib/i18n.js";
-  import { formatPlat, type WorthTodayResult } from "../../lib/stats/tradeAnalytics.js";
+  import {
+    formatPlat,
+    itemKeyBase,
+    type WorthTodayResult,
+  } from "../../lib/stats/tradeAnalytics.js";
   import type { AnalyticsItemLink } from "../../lib/stats/analyticsItemLink.js";
 
   interface Props {
@@ -73,6 +77,14 @@
           {#if row.secondary}
             <span class="truncate text-[0.65rem] text-text-muted">{row.secondary}</span>
           {/if}
+          {#if row.rank != null}
+            <span
+              class="shrink-0 text-[0.65rem] text-text-muted"
+              data-analysis-item-rank={row.rank}
+            >
+              {$tr("browse.rankValue", { value: row.rank })}
+            </span>
+          {/if}
         </span>
         <span class="tabular-nums text-text-muted">
           {$tr("analysis.unitsShort", { count: row.units })}
@@ -88,7 +100,7 @@
 
       <div class="flex max-h-48 flex-col gap-1 overflow-y-auto">
         {#each worth.rows as row (row.key)}
-          {@const link = itemLink.resolve(row.key, row.name)}
+          {@const link = itemLink.resolve(itemKeyBase(row.key), row.name)}
           {#if link}
             <button
               type="button"

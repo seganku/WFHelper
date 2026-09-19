@@ -98,13 +98,11 @@ interface LayoutRun {
   layoutConfidence: number;
 }
 
-// Margin below the candidate's own tier gate, so substring/exact rescues stay
-// as strict relative to their tier as fuzzy ones.
 const NEAR_MISS_RESCUE_MARGIN = 0.06;
 
 function isNearMissCandidate(candidate: SlotCandidate): boolean {
-  // A substring score sitting on the clamp was never measured, so the rescue
-  // margin must not carry it over SUBSTRING_SLOT_GATE.
+  // A substring score sitting on the clamp was never measured, so the rescue margin
+  // must not carry it over SUBSTRING_SLOT_GATE.
   if (candidate.mode === "substring" && candidate.confidence <= SUBSTRING_SCORE_FLOOR + 1e-6) {
     return false;
   }
@@ -176,7 +174,6 @@ function xOverlapFraction(a: SlotRect, b: SlotRect): number {
   return overlap <= 0 ? 0 : overlap / Math.min(a.width, b.width);
 }
 
-/** Fill the winner's empty slots with hits other layouts found at the same x-position. */
 function collectDonorSlots(best: LayoutRun, runs: LayoutRun[]): CollectedSlot[] {
   const filled = new Set(best.collected.map((entry) => entry.index));
   const donorsBySlot = new Map<number, SlotCandidate>();
@@ -185,8 +182,7 @@ function collectDonorSlots(best: LayoutRun, runs: LayoutRun[]): CollectedSlot[] 
     for (const entry of run.collected) {
       const rect = run.rects[entry.index];
       if (!rect) continue;
-      // Assign each donor to the one winner slot it overlaps most, so a single
-      // physical card can't fill two slots.
+      // Each donor goes to the one slot it overlaps most: a physical card cannot fill two.
       let baseIndex = -1;
       let baseOverlap = 0;
       for (let i = 0; i < best.slotLimit; i++) {
@@ -214,8 +210,6 @@ export type StructuredOcrBufferRunner = (
 /** Which OCR reader(s) feed slot candidates; "both" is production behavior. */
 export type RewardReader = "windows" | "onnx" | "both";
 
-/** Out-param: lets the caller tell "not the reward screen" from "OCR missed",
- *  and carries the stage costs the per-attempt timing line reports. */
 export interface SlotScanStats {
   layoutCount: number;
   /** Cards read off the card bars; 0 when the count came from OCR instead. */
@@ -226,12 +220,10 @@ export interface SlotScanStats {
   layoutsTried: number;
 }
 
-// Just under the 0.86 fuzzy gate, so a read that nearly cleared it counts as a
-// near miss while padding-slot junk does not.
+// Just under the 0.86 fuzzy gate, so a read that nearly cleared it counts as a near miss.
 const NEAR_GATE_CONFIDENCE = 0.85;
 
-// A containment match only clears its tier above the SUBSTRING_SCORE_FLOOR
-// clamp, so a score that was never measured cannot fill a slot on its own.
+// A containment match only clears its tier above the SUBSTRING_SCORE_FLOOR clamp.
 const SUBSTRING_SLOT_GATE = 0.92;
 
 function isUsableSlotCandidate(candidate: SlotCandidate): boolean {
@@ -305,7 +297,6 @@ async function readSlotTitle(
     stats?: SlotScanStats;
   },
 ): Promise<SlotRead | null> {
-  // Stagger the slots' sync crop+encode work across macrotasks.
   await yieldToEventLoop();
   const remainingBudgetMs = totalBudgetMs - (Date.now() - startedAt);
   if (remainingBudgetMs <= 0) return null;
@@ -324,8 +315,7 @@ async function readSlotTitle(
   const useOnnx = reader !== "windows" && rewardOcrOnnxAvailable();
 
   const ocrStartedAt = Date.now();
-  // Names wrap to two lines in 3/4-player layouts: OCR overlapping bands plus
-  // the whole crop; both readers feed one pool, the ranking arbitrates.
+  // Names wrap to two lines in 3/4-player layouts, so OCR overlapping bands plus the crop.
   const [regionTexts, onnxRead] = await Promise.all([
     useWindows
       ? Promise.all([
@@ -431,10 +421,14 @@ export async function scanRewardSlotsFallback(
     stats.cardCount = layouts[0]?.counted ? layouts[0].count : 0;
     stats.layoutMs = Date.now() - layoutStartedAt;
   }
+  log.info(
+    `[RewardScanner] Slot layouts: ${layouts.length} candidate(s), cards=${
+      stats?.cardCount ?? 0
+    } in ${Date.now() - layoutStartedAt}ms`,
+  );
   if (layouts.length === 0) return null;
 
-  // Fixed layouts overlap (the 1- and 3-card layouts share their centre card),
-  // so read each distinct title rect once for the whole scan.
+  // The 1- and 3-card layouts share their centre card, so read each rect once per scan.
   const readCache = new Map<string, Promise<SlotRead | null>>();
   const readSlot = (rect: SlotRect, displayIndex: number): Promise<SlotRead | null> => {
     const key = [rect.x, rect.y, rect.width, rect.height].map((v) => v.toFixed(4)).join(":");
@@ -455,8 +449,6 @@ export async function scanRewardSlotsFallback(
   let bestRun: LayoutRun | null = null;
   let bestDebugSlots: ScanDebugSlot[] = [];
   let fallbackDebugSlots: ScanDebugSlot[] = [];
-  // Widest layout tried, so a scan that ships fewer cards than the screen showed
-  // can dump the crops that were rejected instead of the ones that won.
   let widestCount = 0;
   let widestDebugSlots: ScanDebugSlot[] = [];
   let widestNearMisses = 0;
@@ -496,15 +488,12 @@ export async function scanRewardSlotsFallback(
       widestCount = layout.count;
       widestDebugSlots = toScanDebugSlots(slotResults);
       widestMatched = collected.length;
-      // A padding slot echoing noise off a neighbouring card is not a near miss
-      // worth a bundle; only a candidate that nearly cleared the gate is.
       widestNearMisses = slotResults.filter(
         (entry) => entry?.nearMiss && entry.nearMiss.confidence >= NEAR_GATE_CONFIDENCE,
       ).length;
     }
 
     if (!collected.length) {
-      // layouts are confidence-sorted - the first zero-hit one best shows a no-match scan
       if (fallbackDebugSlots.length === 0) fallbackDebugSlots = toScanDebugSlots(slotResults);
       continue;
     }
@@ -529,8 +518,6 @@ export async function scanRewardSlotsFallback(
         `items=${result.items.map((item) => item.name).join(" | ")}`,
     );
 
-    // Structure beats averages: filling more slots wins outright, because the
-    // score averages per-slot quality and a weaker-but-correct card drags it down.
     if (
       !bestResult ||
       result.matchedSlots > bestResult.matchedSlots ||
@@ -558,8 +545,7 @@ export async function scanRewardSlotsFallback(
     }
   }
 
-  // A losing layout may have matched exactly the cards the winner missed
-  // (seen on 21:9). Fill the winner's empty slots from those hits.
+  // A losing layout may have matched exactly the cards the winner missed (seen on 21:9).
   let bestCollected = bestRun ? bestRun.collected : [];
   if (bestResult && bestRun && bestResult.emptySlots > 0 && runs.length > 1) {
     const donors = collectDonorSlots(bestRun, runs);
@@ -573,7 +559,6 @@ export async function scanRewardSlotsFallback(
     }
   }
 
-  // A near-gate read beats a hole; the duplicate guard keeps wrong names out.
   if (bestResult && bestRun && bestResult.emptySlots > 0 && bestResult.exactCount >= 1) {
     const rescued = collectNearMissSlots(bestRun, bestCollected);
     if (rescued.length > 0) {
@@ -593,9 +578,6 @@ export async function scanRewardSlotsFallback(
 
   if (bestResult) {
     const anyDiverge = bestDebugSlots.some((slot) => slot.diverged);
-    // Dump the wider crops only when that layout resolved fewer cards than the
-    // narrow winner and threw away a near-gate read; without both, a healthy
-    // 2-card scan inside a spurious 4-slot layout spends a bundle.
     const shrunk =
       bestResult.slotCount < widestCount &&
       widestMatched < bestResult.matchedSlots &&

@@ -2,9 +2,19 @@
   import { itemLabel } from "../lib/itemLabel.js";
   import { itemMarksFor, sharedPartMasteryResolver } from "../lib/parentMastery.js";
   import { masteryData } from "../stores/mastery.js";
-  import { showMasteredBadges, showOwnedParentBadges } from "../stores/preferences.js";
+  import {
+    showMasteredBadges,
+    showOwnedParentBadges,
+    showVaultedBadges,
+  } from "../stores/preferences.js";
   import { activeItem } from "../stores/modals.js";
-  import { itemDb, wfmItems, componentOwnership, inventoryData } from "../stores/data.js";
+  import {
+    itemDb,
+    wfmItems,
+    componentOwnership,
+    inventoryData,
+    foundryData,
+  } from "../stores/data.js";
   import { createPriceLoader } from "../lib/priceState.js";
   import { enrichComponents, resolveItemPriceLookup } from "../lib/componentResolution.js";
   import { buildCraftingTree } from "../lib/craftingTree.js";
@@ -49,7 +59,6 @@
 
   $: priceText = priceKey ? $tr(priceKey, priceParams) : "";
 
-  // Inline component panel state
   let selectedComp: ComponentInfo | null = null;
   let showCraftingTree = false;
   let lastItemKey = "";
@@ -58,7 +67,7 @@
   let navigationStack: Array<{ item: ParsedItem; showCraftingTree: boolean }> = [];
 
   $: item = $activeItem;
-  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData);
+  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData, $foundryData);
   $: marks = itemMarksFor(item ? { ...item, ...partMastery(item) } : {});
 
   $: itemKey = item?.uniqueName || item?.internalName || "";
@@ -84,9 +93,9 @@
       ? buildCraftingTree(treeRootKey, $itemDb || {}, $componentOwnership)
       : null;
 
-  // A row opened from the inventory grid carries the raw database rows, so the
-  // doubled-ingredient merge and the owned counts are applied here.
-  $: components = item ? enrichComponents(item.components || [], $componentOwnership) : [];
+  $: components = item
+    ? enrichComponents(item.components || [], $componentOwnership, $itemDb || {}, itemKey)
+    : [];
 
   $: safetyVerdict = item ? verdictFor(item, $inventorySafetyVerdicts) : null;
   $: reservations =
@@ -94,8 +103,7 @@
       ? safetyVerdict.reservations
       : [];
 
-  // A chain step is spelled as the recipe lists it, the database as the other
-  // half of the pair, so both spellings have to be tried.
+  // A chain step is spelled as the recipe lists it, the database as the other half of the pair.
   function chainLabel(claim: SafetyClaim, db: Record<string, ItemDbEntry>): string {
     return claim.chain
       .map((uniqueName) => {
@@ -108,7 +116,6 @@
       .join(" > ");
   }
 
-  // Reset selected component when the active item changes.
   $: if (item && itemKey !== lastItemKey) {
     if (!internalNavigation) {
       navigationStack = [];
@@ -156,7 +163,6 @@
   }
 
   function onModalClose() {
-    // Escape / backdrop: close inline panel first, then tree, then full close.
     if (selectedComp) closeCompPanel();
     else if (showCraftingTree) showCraftingTree = false;
     else close();
@@ -226,7 +232,6 @@
     </div>
 
     {#if showCraftingTree && craftingTree}
-      <!-- Crafting tree mode: compact header + full tree -->
       <div class="flex items-center gap-3 px-4 py-2 border-b border-border-subtle">
         <div class="shrink-0 h-10 w-10">
           <ItemImage
@@ -246,7 +251,6 @@
         <CraftingTree tree={craftingTree} onOpenItem={openCraftingTreeItem} />
       </div>
     {:else}
-      <!-- Normal detail mode -->
       <div class="detail-header">
         <div class="detail-img-wrap">
           <ItemImage
@@ -260,7 +264,9 @@
           <h2>{itemLabel(item)}</h2>
           <div class="detail-tags">
             {#if item.isPrime}<span class="detail-tag prime">{$tr("common.prime")}</span>{/if}
-            {#if item.vaulted}<span class="detail-tag vaulted">{$tr("common.vaulted")}</span>{/if}
+            {#if $showVaultedBadges && item.vaulted}<span class="detail-tag vaulted"
+                >{$tr("common.vaulted")}</span
+              >{/if}
             {#if $showMasteredBadges && (marks.mastered || item.status === "mastered")}
               <span
                 class="detail-tag mastered"
@@ -313,12 +319,12 @@
             <h3>{$tr("detail.components")}</h3>
             <div class="detail-components">
               {#each components as comp}
-                {@const ownedCount = comp.ownedCount ?? 0}
                 {@const needed = comp.itemCount || 1}
+                {@const ownedCount = comp.built ?? comp.ownedCount ?? 0}
                 {@const countClass =
                   ownedCount >= needed
                     ? "text-success"
-                    : ownedCount > 0
+                    : ownedCount > 0 || comp.blueprintHeld
                       ? "text-warning"
                       : "text-danger"}
                 <button
@@ -331,7 +337,11 @@
                   on:click={() => selectComponent(comp)}
                 >
                   <span class="comp-name">{itemLabel(comp) || $tr("common.unknown")}</span>
-                  <span class="comp-count {countClass}">{ownedCount}/{needed}</span>
+                  <span
+                    class="comp-count {countClass}"
+                    title={comp.blueprintHeld ? $tr("common.blueprintOwnedNotBuilt") : undefined}
+                    >{ownedCount}/{needed}</span
+                  >
                 </button>
               {/each}
             </div>

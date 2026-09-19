@@ -12,6 +12,7 @@
   import ThemedControlCard from "../ThemedControlCard.svelte";
   import SegmentedControl from "../SegmentedControl.svelte";
   import GlassBlurControl from "./GlassBlurControl.svelte";
+  import OverlayOpacityControl from "./OverlayOpacityControl.svelte";
 
   const cornerOptions: Array<{ value: ThemeCornerStyle; labelKey: MessageKey }> = [
     { value: "sharp", labelKey: "appearance.cornerSharp" },
@@ -57,36 +58,43 @@
   }));
 </script>
 
-<div class="appearance-section">
+<div class="appearance-section" data-style-section>
   <h4 class="appearance-section-label">{$tr("appearance.style")}</h4>
 
   <div class="grid gap-2">
     <ThemedControlCard>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-text-secondary text-xs font-medium">{$tr("appearance.cornerStyle")}</span>
-        <SegmentedControl
-          value={effects.cornerStyle}
-          options={cornerSegOptions}
-          onChange={(v) => themeSettings.setEffects({ cornerStyle: v })}
-        />
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium"
+          >{$tr("appearance.cornerStyle")}</span
+        >
+        <span class="shrink-0">
+          <SegmentedControl
+            value={effects.cornerStyle}
+            options={cornerSegOptions}
+            onChange={(v) => themeSettings.setEffects({ cornerStyle: v })}
+          />
+        </span>
       </div>
     </ThemedControlCard>
 
     <ThemedControlCard>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-text-secondary text-xs font-medium">{$tr("appearance.surfaceStyle")}</span
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium"
+          >{$tr("appearance.surfaceStyle")}</span
         >
-        <SegmentedControl
-          value={effects.surfaceStyle}
-          options={surfaceSegOptions}
-          onChange={(v) => themeSettings.setEffects({ surfaceStyle: v })}
-        />
+        <span class="shrink-0">
+          <SegmentedControl
+            value={effects.surfaceStyle}
+            options={surfaceSegOptions}
+            onChange={(v) => themeSettings.setEffects({ surfaceStyle: v })}
+          />
+        </span>
       </div>
     </ThemedControlCard>
 
     <ThemedControlCard>
       <GlassBlurControl>
-        <span class="text-text-secondary text-xs font-medium">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium">
           {$tr("common.glassBlur")}
           <span class="block text-xs text-text-muted font-normal mt-0.5"
             >{$tr("appearance.glassHint")}</span
@@ -96,22 +104,30 @@
     </ThemedControlCard>
 
     <ThemedControlCard>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-text-secondary text-xs font-medium">{$tr("appearance.relicCards")}</span>
-        <SegmentedControl
-          value={effects.relicCardStyle}
-          options={relicSegOptions}
-          onChange={(v) => themeSettings.setEffects({ relicCardStyle: v })}
-        />
+      <OverlayOpacityControl />
+    </ThemedControlCard>
+
+    <ThemedControlCard>
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium"
+          >{$tr("appearance.relicCards")}</span
+        >
+        <span class="shrink-0">
+          <SegmentedControl
+            value={effects.relicCardStyle}
+            options={relicSegOptions}
+            onChange={(v) => themeSettings.setEffects({ relicCardStyle: v })}
+          />
+        </span>
       </div>
     </ThemedControlCard>
 
     <ThemedControlCard>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-text-secondary text-xs font-medium"
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium"
           >{$tr("appearance.rivenCardSize")}</span
         >
-        <div data-riven-card-size-control>
+        <div class="shrink-0" data-riven-card-size-control>
           <SegmentedControl
             value={$rivenCardSize}
             options={rivenSegOptions}
@@ -123,7 +139,7 @@
 
     <ThemedControlCard>
       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-        <span class="min-w-0 text-text-secondary text-xs font-medium">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium">
           {$tr("appearance.marketListDensity")}
           <span class="block text-xs text-text-muted font-normal mt-0.5">
             {$tr("appearance.marketListDensityHint")}
@@ -141,7 +157,7 @@
 
     <ThemedControlCard>
       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-        <span class="min-w-0 text-text-secondary text-xs font-medium">
+        <span class="min-w-0 flex-[1_1_5rem] text-text-secondary text-xs font-medium">
           {$tr("appearance.inventoryViewMode")}
           <span class="block text-xs text-text-muted font-normal mt-0.5">
             {$tr("appearance.inventoryViewModeHint")}

@@ -219,6 +219,9 @@ export interface PreloadAPI {
   refreshRivenGoodRolls: (
     weaponName: string,
   ) => Promise<IpcInvokeMap["refreshRivenGoodRolls"]["return"]>;
+  gradeRivenContracts: (
+    contracts: IpcInvokeMap["gradeRivenContracts"]["args"][0],
+  ) => Promise<IpcInvokeMap["gradeRivenContracts"]["return"]>;
   onHelperDownloadProgress: (
     callback: (progress: IpcEventMap["helper-download-progress"]) => void,
   ) => () => void;

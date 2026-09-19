@@ -180,6 +180,39 @@ describe("fetchItemOrderBookBySlug", () => {
     expect(foil.data.sell.map((row) => row.platinum)).toEqual([150]);
     expect(await fetchItemOrderBookBySlug("spectral_serration", { rank: 10 })).toEqual(regular);
   });
+  it("keeps a bulk order's per-item price ahead of a dearer single listing", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(200, {
+        data: [
+          {
+            type: "buy",
+            platinum: 97,
+            quantity: 24,
+            perTrade: 6,
+            visible: true,
+            user: { ingameName: "bulk-buyer", status: "ingame" },
+          },
+          {
+            type: "buy",
+            platinum: 20,
+            quantity: 1,
+            visible: true,
+            user: { ingameName: "single-buyer", status: "ingame" },
+          },
+        ],
+      }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchItemOrderBookBySlug("molt_efficiency");
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("Expected an order book");
+    expect(result.data.buy.map((row) => [row.userName, row.platinum, row.unitPlatinum])).toEqual([
+      ["single-buyer", 20, 20],
+      ["bulk-buyer", 97, 16.17],
+    ]);
+  });
+
   it("returns error for invalid slug input", async () => {
     const result = await fetchItemOrderBookBySlug("   ");
 

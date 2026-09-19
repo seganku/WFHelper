@@ -16,6 +16,7 @@ import {
 import { WfmApiError } from "./wfmTypes";
 import { setStatusViaWebSocket } from "./wfmWebSocket";
 import { safeStorage } from "electron";
+import { updateListenerToken } from "./wfmWebSocketListener";
 
 const log = withScope("wfmSession");
 
@@ -65,6 +66,7 @@ setTokenRotationHandler((token) => {
   _token = token;
   updateCsrfFromToken(token);
   if (_userName) _saveSession(token, _userName);
+  updateListenerToken(token);
   log.info("[WFMSession] Session token rotated by WFM");
 });
 

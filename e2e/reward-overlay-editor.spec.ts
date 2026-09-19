@@ -154,6 +154,7 @@ test("reward layout editing saves from Settings and opens from setup", async () 
       .locator("[data-reward-editor]")
       .screenshot({ path: testInfo.outputPath("reward-editor-default.png") });
     await expect.poll(() => clippedFields(overlay)).toEqual([]);
+    await page.locator("[data-reward-editor-preview]").selectOption("rewards");
     const lastPart = overlay.locator('[data-reward-field="part5Count"]').first();
     await lastPart.scrollIntoViewIfNeeded();
     await expect(lastPart).toBeInViewport();

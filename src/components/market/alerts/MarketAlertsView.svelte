@@ -27,7 +27,6 @@
   let statOptions = $state<RivenStatOption[]>([]);
   let editorOpen = $state(false);
   let editingRule = $state<MarketAlertRule | null>(null);
-  // Distinct flags: a shared panel flag lets Import reopen the last export.
   let importOpen = $state(false);
   let exportOpen = $state(false);
   let importText = $state("");
@@ -66,8 +65,6 @@
     void invoke("getRivenStatOptions").then((options) => {
       statOptions = options;
     });
-    // The engine pushes every recorded hit and status move; the interval only
-    // covers the last-check timestamp.
     const off = on("market-alerts:changed", () => {
       void refreshLive();
     });
@@ -78,7 +75,6 @@
     };
   });
 
-  // One pass per store push; the resolvers cache their indexes by store identity.
   const cards = $derived(
     rules.map((rule) => ({
       rule,
@@ -87,12 +83,9 @@
     })),
   );
   const thumbByRuleId = $derived(new Map(cards.map((card) => [card.rule.id, card.thumb])));
-  // A hit outlives its rule, so a row only offers the sell action while the item
-  // rule it came from still exists.
   const itemRuleById = $derived(
     new Map(rules.filter((rule) => rule.kind === "item").map((rule) => [rule.id, rule])),
   );
-  // Stamped per poll. In the card an unchanged end stamp would freeze.
   const cooldownLeftByRuleId = $derived(
     new Map<string, number>(
       Object.entries(status?.cooldowns ?? {}).map(
@@ -124,11 +117,21 @@
     await refresh();
   }
 
+  async function setNoCooldown(rule: MarketAlertRule, value: boolean): Promise<void> {
+    const result = await invoke("marketAlertsSave", {
+      rule: { ...structuredClone($state.snapshot(rule)), noCooldown: value },
+      ...(bindings[rule.id] ? { binding: $state.snapshot(bindings[rule.id]) } : {}),
+    });
+    if (!result.ok) {
+      addToast({ level: "warning", message: result.error ?? $tr("marketAlerts.saveFailed") });
+      return;
+    }
+    await refresh();
+  }
+
   async function deleteRule(rule: MarketAlertRule): Promise<void> {
     if (!(await confirmWithDialog($tr("marketAlerts.deleteConfirm"), $tr))) return;
     const result = await invoke("marketAlertsDelete", rule.id);
-    // The link is keyed by rule id, so a deleted rule must not keep its slot.
-    // A refused delete leaves the rule listed, so its link has to survive.
     if (result.ok) setAlertSellLink(rule.id, "");
     await refresh();
   }
@@ -187,7 +190,6 @@
     const result = await invoke("marketAlertsSave", {
       rule: {
         ...copy,
-        // A copy starts quiet: two identical rules firing at once is never wanted.
         enabled: false,
         name: $tr("marketAlerts.copyName", { name: rule.name }).slice(
           0,
@@ -389,6 +391,7 @@
           onSelect={selectRule}
           onToggle={(rule) => void toggleRule(rule)}
           onClearCooldown={(rule) => void clearCooldown(rule)}
+          onSetNoCooldown={(rule, value) => void setNoCooldown(rule, value)}
           onEdit={editRule}
           onDuplicate={(rule) => void duplicateRule(rule)}
           onDelete={(rule) => void deleteRule(rule)}

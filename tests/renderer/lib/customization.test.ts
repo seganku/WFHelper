@@ -266,4 +266,26 @@ describe("portable customization", () => {
     expect(text).not.toContain("inventoryPath");
     expect(parsed.version).toBe(1);
   });
+
+  it("round trips shared and per-overlay opacity through export and import", async () => {
+    themeSettings.resetAll();
+    themeSettings.setEffects({ overlayOpacity: 0.65 });
+    themeSettings.setOverlayOpacity("reward", 0.3);
+    themeSettings.setOverlayOpacity("rivenRight", 0.8);
+    themeSettings.saveCustomTheme("Overlay opacity");
+    const parsed = parseCustomization(await exportCustomization());
+    themeSettings.resetAll();
+    await applyCustomization(parsed);
+    expect(get(themeSettings).effects).toMatchObject({
+      overlayOpacity: 0.65,
+      overlayOpacityOverrides: { reward: 0.3, rivenRight: 0.8 },
+    });
+    expect(get(themeSettings).customThemes[0]?.effects.overlayOpacityOverrides).toEqual({
+      reward: 0.3,
+      rivenRight: 0.8,
+    });
+    themeSettings.setOverlayOpacity("reward", null);
+    expect(parsed.theme.effects.overlayOpacityOverrides?.reward).toBe(0.3);
+    themeSettings.resetAll();
+  });
 });

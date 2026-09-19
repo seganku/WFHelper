@@ -5,21 +5,36 @@
   import ThemedControlCard from "../ThemedControlCard.svelte";
 
   $: fontSizes = $themeSettings.fontSizes;
-  $: scalePercent = Math.round(fontSizes.globalScale * 100);
+  let draftScale: number | null = null;
+  $: scaleValue = draftScale ?? fontSizes.globalScale;
+  $: scalePercent = Math.round(scaleValue * 100);
 
-  function onScaleChange(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    const parsed = Number(input.value);
-    if (!Number.isFinite(parsed)) return;
-    const value = Math.max(FONT_SCALE_MIN, Math.min(FONT_SCALE_MAX, parsed));
+  function clampScale(value: number): number {
+    return Math.max(FONT_SCALE_MIN, Math.min(FONT_SCALE_MAX, value));
+  }
+
+  function onScaleInput(event: Event): void {
+    const parsed = Number((event.target as HTMLInputElement).value);
+    if (Number.isFinite(parsed)) draftScale = clampScale(parsed);
+  }
+
+  function onScaleCommit(): void {
+    if (draftScale === null) return;
+    const value = draftScale;
+    draftScale = null;
     themeSettings.setGlobalScale(value);
   }
 
-  function onScalePercentChange(event: Event): void {
+  function onScalePercentCommit(event: Event): void {
     const input = event.target as HTMLInputElement;
     const parsed = Number(input.value);
-    if (!Number.isFinite(parsed)) return;
-    const value = Math.max(FONT_SCALE_MIN, Math.min(FONT_SCALE_MAX, parsed / 100));
+    if (!input.value.trim() || !Number.isFinite(parsed)) {
+      input.value = String(scalePercent);
+      return;
+    }
+    const value = clampScale(parsed / 100);
+    draftScale = null;
+    input.value = String(Math.round(value * 100));
     themeSettings.setGlobalScale(value);
   }
 
@@ -39,7 +54,7 @@
     };
 </script>
 
-<div class="appearance-section">
+<div class="appearance-section" data-font-sizes>
   <div class="appearance-section-head">
     <h4 class="appearance-section-label">{$tr("appearance.fontSizes")}</h4>
     <button class="btn-secondary btn-sm" on:click={() => themeSettings.resetFontSizes()}>
@@ -53,21 +68,25 @@
       <div class="flex items-center gap-1.5">
         <input
           type="range"
-          class="w-32 accent-accent"
+          class="w-32 min-w-0 accent-accent"
           min={FONT_SCALE_MIN}
           max={FONT_SCALE_MAX}
           step={FONT_SCALE_STEP}
-          value={fontSizes.globalScale}
-          on:input={onScaleChange}
+          value={scaleValue}
+          on:input={onScaleInput}
+          on:change={onScaleCommit}
         />
         <input
           type="number"
-          class="w-16 border border-[var(--ui-control-border)] rounded-[var(--radius-md)] bg-bg-base text-text-primary text-xs py-1 px-2 outline-none text-right focus:border-accent-dim focus:shadow-[0_0_0_2px_rgba(212,168,67,0.12)]"
+          class="w-16 min-w-0 border border-[var(--ui-control-border)] rounded-[var(--radius-md)] bg-bg-base text-text-primary text-xs py-1 px-2 outline-none text-right focus:border-accent-dim focus:shadow-[0_0_0_2px_rgba(212,168,67,0.12)]"
           min={Math.round(FONT_SCALE_MIN * 100)}
           max={Math.round(FONT_SCALE_MAX * 100)}
           step={Math.round(FONT_SCALE_STEP * 100)}
           value={scalePercent}
-          on:input={onScalePercentChange}
+          on:blur={onScalePercentCommit}
+          on:keydown={(event) => {
+            if (event.key === "Enter") onScalePercentCommit(event);
+          }}
         />
         <span class="font-display text-xs font-bold text-accent">%</span>
       </div>

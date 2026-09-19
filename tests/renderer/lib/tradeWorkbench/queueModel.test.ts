@@ -143,12 +143,10 @@ describe("workbench queue selection", () => {
   });
 
   it("respects safety caps: protected copies need an explicit override", () => {
-    // Equipment at rank 0 keeps a last copy: total 2, safe 1.
     const items = [makeItem("Boltor", { inventoryGroup: "equipment", amount: 2 })];
     const rows = buildQueueRows(items, EMPTY_CTX, lookupFor({ name: "Boltor", slug: "boltor" }));
     expect(rows[0].verdict).toMatchObject({ total: 2, reserved: 1, safe: 1 });
     expect(rows[0].quantity).toBe(1);
-    // Per-item safety settings key off the DE path, not the display name.
     expect(rowSafetyKey(rows[0])).toBe(rows[0].item.internalName);
     expect(bindingReasonKeys(rows[0].verdict)).toEqual(["inventory.safety.reason.lastCopy"]);
 
@@ -160,11 +158,8 @@ describe("workbench queue selection", () => {
     expect(row.overrideAcknowledged).toBe(true);
     expect(row.overrideAcknowledgedAt).toBe(123);
 
-    // Quantity never exceeds what the account holds.
     expect(setRowQuantity(row, 99).quantity).toBe(2);
 
-    // Re-running a row's quantity against a smaller verdict clamps it, so the
-    // caller needs no clamp of its own.
     const sold = setRowQuantity(
       { ...row, verdict: { ...row.verdict, total: 1, safe: 1, reserved: 0 } },
       row.quantity,
@@ -174,7 +169,6 @@ describe("workbench queue selection", () => {
   });
 
   it("raising the quantity past a prior acknowledgement re-requires consent", () => {
-    // Spare default 2 on 5 copies: safe 3, so 4 and 5 are both override land.
     const spareCtx = buildSafetyContext({
       itemDb: {},
       settings: { spareDefault: 2, spares: {}, locks: [], setKeep: [] },
@@ -191,7 +185,6 @@ describe("workbench queue selection", () => {
     expect(row.overrideAcknowledged).toBe(true);
     row = setRowQuantity(row, 5);
     expect(row.overrideAcknowledged).toBe(false);
-    // Dropping back inside the safe count clears the override entirely.
     row = setRowQuantity(acknowledgeRowOverride(row, 2), 3);
     expect(row.overrideAcknowledged).toBe(false);
     expect(rowNeedsOverride(row)).toBe(false);
@@ -204,9 +197,8 @@ describe("workbench queue selection", () => {
       EMPTY_CTX,
       lookupFor({ name: "Lex Prime Barrel", slug: "lex_prime_barrel" }),
     );
-    // Three listings undercut our 30p listing, so damping lets the drop pass.
     let row = attachMarketData(rows[0], sellBook(28, 28, 29, 31), null, [makeOrder()]);
-    expect(row.existingOrder).toEqual({ id: "order-1", platinum: 30, quantity: 2 });
+    expect(row.existingOrder).toEqual({ id: "order-1", platinum: 30, quantity: 2, perTrade: 1 });
     expect(row.market?.lowestSell).toBe(28);
     expect(row.market?.activeSellers).toBe(4);
 
@@ -224,6 +216,47 @@ describe("workbench queue selection", () => {
       quantity: 5,
       slug: "lex_prime_barrel",
     });
+  });
+
+  it("reads a bulk order at its per-item price on both sides of the book", () => {
+    const items = [makeItem("Lex Prime Barrel")];
+    const rows = buildQueueRows(
+      items,
+      EMPTY_CTX,
+      lookupFor({ name: "Lex Prime Barrel", slug: "lex_prime_barrel" }),
+    );
+    const bulk = (platinum: number, perTrade: number, userName: string): PricingListing => ({
+      platinum,
+      unitPlatinum: Math.round((platinum / perTrade) * 100) / 100,
+      quantity: perTrade * 4,
+      status: "ingame",
+      userName,
+    });
+    const row = attachMarketData(
+      rows[0],
+      [bulk(97, 6, "bulkSeller"), ...sellBook(20)],
+      [bulk(97, 6, "bulkBuyer"), ...sellBook(20)],
+      [],
+    );
+
+    expect(row.market?.lowestSell).toBe(16.17);
+    expect(row.market?.highestBuy).toBe(20);
+    expect(row.market?.spread).toBeCloseTo(-3.83, 2);
+    expect(applyStrategy(row, { id: "match-cheapest" }, null).suggestion?.price).toBe(16);
+  });
+
+  it("keeps the suggestion in our own listing units when we sell in bulk", () => {
+    const items = [makeItem("Lex Prime Barrel")];
+    const rows = buildQueueRows(
+      items,
+      EMPTY_CTX,
+      lookupFor({ name: "Lex Prime Barrel", slug: "lex_prime_barrel" }),
+    );
+    const order = makeOrder({ platinum: 100, perTrade: 6 });
+    const row = attachMarketData(rows[0], sellBook(20, 21, 22), null, [order]);
+
+    expect(row.existingOrder?.perTrade).toBe(6);
+    expect(applyStrategy(row, { id: "match-cheapest" }, null).suggestion?.price).toBe(120);
   });
 
   it("manual price wins over suggestion, which wins over the existing listing", () => {
@@ -296,7 +329,6 @@ describe("workbench queue selection", () => {
     const first = buildPlanFromRows([row], 1000).plan;
     const second = buildPlanFromRows([row], 1000).plan;
     expect(first.planId).not.toBe(second.planId);
-    // Both must still survive the main-process plan parser.
     expect(parseWorkbenchPlan(first)?.planId).toBe(first.planId);
     expect(parseWorkbenchPlan(second)?.planId).toBe(second.planId);
   });
@@ -337,8 +369,6 @@ describe("workbench queue selection", () => {
     expect(resolveQueueSlug(makeItem("Absent"), lookup)).toBeNull();
   });
 
-  // Same refusal the inventory grid makes: the catalog record is only the item's
-  // when its own gameRef points back, so a key collision falls through to the name.
   it("refuses a catalog record whose gameRef names a different item", () => {
     const item = makeItem("Collision");
     const lookup: WfmItemsLookup = {
@@ -386,7 +416,6 @@ describe("inventory selection join", () => {
   });
 
   it("skips an inventory row whose name is not a string instead of throwing", () => {
-    // One bad row's name must not crash the whole market join.
     const broken = makeItem("Broken", { name: 117 as unknown as string, inventoryKey: "broken#0" });
     const sellable = makeItem("Lex Prime Barrel", { inventoryKey: "lex#0" });
     const lookup = lookupFor({ name: "Lex Prime Barrel", slug: "lex_prime_barrel" });
@@ -502,7 +531,6 @@ describe("workbench queue merge across a reopen", () => {
     const acknowledged = acknowledgeRowOverride(setRowQuantity(built[0], 2), 123);
     expect(acknowledged.overrideAcknowledged).toBe(true);
 
-    // Same amount survives a rebuild; the acknowledgement still covers it.
     const same = mergeQueueRows(
       [acknowledged],
       buildQueueRows(items, EMPTY_CTX, lookupFor({ name: "Boltor", slug: "boltor" })),
@@ -510,7 +538,6 @@ describe("workbench queue merge across a reopen", () => {
     expect(same[0].quantity).toBe(2);
     expect(same[0].overrideAcknowledged).toBe(true);
 
-    // A shrunken account cannot keep the consent given for two copies.
     const fewer = buildQueueRows(
       [makeItem("Boltor", { inventoryGroup: "equipment", amount: 1 })],
       EMPTY_CTX,
@@ -562,7 +589,6 @@ describe("pricing gate and own-order join", () => {
     const [stale] = dropStaleMarketData([row]);
     expect(unpricedSelectedRows([stale])).toHaveLength(1);
     expect(rowWarnings(stale)).toContain("no-listing-data");
-    // A price the user typed is their own input, not aged market data.
     expect(unpricedSelectedRows([{ ...stale, manualPrice: 44 }])).toHaveLength(0);
   });
 
@@ -577,7 +603,12 @@ describe("pricing gate and own-order join", () => {
     expect(row.existingOrder).toBeNull();
 
     const [rejoined] = attachExistingOrders([row], [makeOrder()]);
-    expect(rejoined.existingOrder).toEqual({ id: "order-1", platinum: 30, quantity: 2 });
+    expect(rejoined.existingOrder).toEqual({
+      id: "order-1",
+      platinum: 30,
+      quantity: 2,
+      perTrade: 1,
+    });
     expect(rejoined.sellBook).toBe(row.sellBook);
     expect(rejoined.market).toBe(row.market);
     expect(buildPlanFromRows([rejoined], 1000).plan.rows[0].mode).toBe("update");
@@ -739,7 +770,6 @@ describe("selection safety context inputs", () => {
         },
         pins: [],
       });
-    // Mastered and sold still leaves the parts of the copy that has to be rebuilt.
     expect(safeToList({ internalName: CHASSIS, amount: 4 }, contextFor(false)).reserved).toBe(2);
     expect(safeToList({ internalName: CHASSIS, amount: 4 }, contextFor(true)).reserved).toBe(0);
   });
@@ -818,7 +848,6 @@ describe("workbench queue filtering", () => {
 
     expect(unpricedHiddenCount(rows, { plat: { min: 1, max: null } })).toBe(1);
     expect(unpricedHiddenCount(rows, { plat: NO_PLAT_RANGE })).toBe(0);
-    // The count is of rows the bound hid, so the other filters still apply.
     expect(unpricedHiddenCount(rows, { text: "cheap", plat: { min: 1, max: null } })).toBe(0);
   });
 
@@ -842,7 +871,6 @@ describe("workbench queue filtering", () => {
       listed: "unlisted",
     });
     expect(names(filtered)).toEqual(["Lex Prime Barrel"]);
-    // A hidden row keeps its tick: the filter is a view, not a deselection.
     expect(rows.map((row) => row.selected)).toEqual([true, false, true]);
   });
 });

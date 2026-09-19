@@ -120,6 +120,7 @@ export const RIVENS_SEARCH_AUCTIONS = "search-riven-auctions";
 export const RIVENS_GET_BEST_ATTRIBUTES = "get-riven-best-attributes";
 export const RIVENS_GET_GOOD_ROLL = "get-riven-good-roll";
 export const RIVENS_REFRESH_GOOD_ROLLS = "refresh-riven-good-rolls";
+export const RIVENS_GRADE_CONTRACTS = "grade-riven-contracts";
 export const RIVENS_CREATE_AUCTION = "create-riven-auction";
 export const RIVENS_UPDATE_AUCTION = "update-riven-auction";
 export const RIVENS_DELETE_AUCTION = "delete-riven-auction";
@@ -150,6 +151,8 @@ export const SIMULATE_RELIC_TRIGGER = "simulate-relic-trigger";
 export const RELIC_REWARD_TRIGGER = "relic-reward-trigger";
 export const RELIC_PLANNER_TRIGGER = "relic-planner-trigger";
 export const RELIC_REWARD_ITEMS = "relic-reward-items";
+export const RELIC_REWARD_CONTENT_HEIGHT = "relic-reward-content-height";
+export const RELIC_REWARD_PRESENTATION = "relic-reward-presentation";
 export const RELIC_RECOMMENDATIONS = "relic-recommendations";
 
 export const RIVEN_OVERLAY_CLOSE = "riven-overlay-close";

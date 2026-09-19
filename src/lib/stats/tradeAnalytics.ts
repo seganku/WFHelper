@@ -7,7 +7,9 @@ import {
   toLocalDayKey as toDayKey,
 } from "../../../config/shared/dayKey.js";
 import { fallbackNameFromUniqueName } from "../../../config/shared/displayName.js";
+import { parseTradedItemName } from "../../../config/shared/tradeItemName.js";
 import { normalizeWfmSlug } from "../../../config/shared/wfm.js";
+import { rendererPriceCacheKey } from "../../../config/shared/wfmCacheKeys.js";
 import { gameRefKey } from "../marketNaming.js";
 import { readStorage, writeStorage } from "../persistence.js";
 import type {
@@ -62,6 +64,7 @@ export interface ItemRollup {
   name: string;
   /** Muted qualifier, currently the generated riven roll name. */
   secondary: string | null;
+  rank: number | null;
   units: number;
   events: number;
   /** Platinum allocated to this item across its events. */
@@ -180,6 +183,7 @@ interface WorthTodayRow {
   key: string;
   name: string;
   secondary: string | null;
+  rank: number | null;
   units: number;
   median: number | null;
   worth: number | null;
@@ -225,18 +229,33 @@ function pricedDirection(type: TradeType): Direction | null {
 /** Stable per-item key. The market slug leads because it is the one id both live
  *  and imported rows have always carried, so a row written before uniqueName was
  *  recorded still lands in the same bucket as a newer one. */
-export function itemKey(item: TradeItem): string {
+function baseItemKey(item: TradeItem): string {
   const slug = normalizeWfmSlug(item?.wfmSlug);
   if (slug) return slug;
   const internal = (item?.internalName ?? "").trim();
   if (internal) return internal;
-  return (item?.displayName ?? "").trim().toLowerCase();
+  // A row with no id at all keys by name, so the dialog's rank tag has to go or
+  // the same arcane at two ranks lands in two buckets.
+  return (item?.displayName ?? "").replace(RANK_TAG, "").trim().toLowerCase();
+}
+
+const RANK_KEY_TAG = /:r\d+$/;
+
+export function itemKey(item: TradeItem): string {
+  const base = baseItemKey(item);
+  if (!base) return base;
+  const rank = tradeItemLabel(item).rank;
+  return rank == null ? base : `${base}:r${rank}`;
+}
+
+export function itemKeyBase(key: string): string {
+  return key.replace(RANK_KEY_TAG, "");
 }
 
 interface TradeItemLabel {
   primary: string;
-  /** Muted qualifier under or beside the name; null when there is none. */
   secondary: string | null;
+  rank: number | null;
 }
 
 // DE builds a riven roll name out of these syllables (ExportUpgrades
@@ -286,12 +305,28 @@ export function tradeItemLabel(item: TradeItem): TradeItemLabel {
   const name = raw.startsWith("/") ? fallbackNameFromUniqueName(raw) : raw;
   const riven = parseRivenName(name);
   // "Riven" is the game's own word for the item, so it stays English here.
-  if (riven) return { primary: `${riven.weapon} Riven`, secondary: riven.roll };
-  return { primary: name, secondary: null };
+  if (riven) return { primary: `${riven.weapon} Riven`, secondary: riven.roll, rank: null };
+  // Only the dialog's own rank tag counts. Any other parenthetical belongs to
+  // the name, and an import that carries no tag must not be given a rank.
+  const ranked = RANK_TAG.test(name) ? parseTradedItemName(name) : null;
+  if (ranked && ranked.rank != null && ranked.baseName) {
+    return { primary: ranked.baseName, secondary: null, rank: ranked.rank };
+  }
+  return { primary: name, secondary: null, rank: null };
 }
 
 function itemName(item: TradeItem): string {
   return tradeItemLabel(item).primary;
+}
+
+/** Price-cache key for a trade row, or null when nothing names an item. A
+ *  bare-slug price on warframe.market is whichever rank sold last, so a row
+ *  that carries a rank only ever reads the entry pinned to it. */
+export function tradeItemPriceCacheKey(item: TradeItem, lookup: WfmItemsLookup): string | null {
+  const name = (item?.displayName ?? "").trim().toLowerCase();
+  const slug = normalizeWfmSlug(item?.wfmSlug) ?? normalizeWfmSlug(lookup[name]?.url_name);
+  if (!slug) return null;
+  return rendererPriceCacheKey(slug, tradeItemLabel(item).rank);
 }
 
 /** Item-database category to a kind, or null when the category says nothing. */
@@ -425,6 +460,7 @@ interface Accum {
   key: string;
   name: string;
   secondary: string | null;
+  rank: number | null;
   units: number;
   events: number;
   platinum: number;
@@ -451,6 +487,7 @@ function accumulate(
     key,
     name: label.primary,
     secondary: label.secondary,
+    rank: label.rank,
     units,
     events: 1,
     platinum,
@@ -463,6 +500,7 @@ function rollupToList(map: Map<string, Accum>, limit: number): ItemRollup[] {
       key: a.key,
       name: a.name,
       secondary: a.secondary,
+      rank: a.rank,
       units: a.units,
       events: a.events,
       platinum: a.platinum,
@@ -505,8 +543,26 @@ export interface ItemCategoryEntry {
   key: string;
   name: string;
   secondary: string | null;
+  rank: number | null;
   resolved: string;
   overridden: boolean;
+}
+
+function effectiveOverride(overrides: Record<string, string>, key: string): string {
+  return overrides[key] ?? overrides[itemKeyBase(key)] ?? "";
+}
+
+/** An inheriting row keeps an empty entry of its own, so the base key survives
+ *  for the other ranks instead of being deleted out from under them. */
+export function clearCategoryOverride(
+  overrides: Record<string, string>,
+  key: string,
+): Record<string, string> {
+  const base = itemKeyBase(key);
+  const next = { ...overrides };
+  if (base !== key && overrides[base] != null) next[key] = "";
+  else delete next[key];
+  return next;
 }
 
 /** One row per distinct item in the range, for the category override editor. */
@@ -525,12 +581,15 @@ export function distinctItemCategories(
         key,
         name: label.primary,
         secondary: label.secondary,
+        rank: label.rank,
         resolved: resolve(item),
-        overridden: overrides[key] !== undefined,
+        overridden: effectiveOverride(overrides, key) !== "",
       });
     }
   }
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...map.values()].sort(
+    (a, b) => a.name.localeCompare(b.name) || (a.rank ?? -1) - (b.rank ?? -1),
+  );
 }
 
 /** Category names already in play, as suggestions for the override editor. */
@@ -636,7 +695,8 @@ export function withCategoryOverrides(
   overrides: Record<string, string>,
 ): CategoryResolver {
   return (item) => {
-    const override = overrides[itemKey(item)];
+    const key = itemKey(item);
+    const override = effectiveOverride(overrides, key);
     if (override) return override;
     const resolved = base(item);
     return resolved || UNCATEGORIZED;
@@ -960,10 +1020,6 @@ function consume(lots: Lot[], units: number): { units: number; cost: number } {
   return { units: units - left, cost };
 }
 
-/**
- * FIFO cost basis over the range, oldest event first. A sale with no matching
- * purchase lot is unpriced, never zero-cost: the acquisition really is unknown.
- */
 export function fifoCostBasis(events: TradeEvent[]): CostBasisResult {
   // Oldest first; sortByDate breaks a timestamp tie in favour of the purchase.
   const ordered = sortByDate(events, false);
@@ -980,7 +1036,7 @@ export function fifoCostBasis(events: TradeEvent[]): CostBasisResult {
       if (totalUnits <= 0) continue;
       const unitCost = safePlat(event) / totalUnits;
       for (const item of items) {
-        const key = itemKey(item);
+        const key = baseItemKey(item);
         if (!key) continue;
         basisRow(rows, key, itemName(item));
         const queue = lots.get(key) ?? [];
@@ -996,7 +1052,7 @@ export function fifoCostBasis(events: TradeEvent[]): CostBasisResult {
       if (totalUnits <= 0) continue;
       const unitRevenue = safePlat(event) / totalUnits;
       for (const item of items) {
-        const key = itemKey(item);
+        const key = baseItemKey(item);
         if (!key) continue;
         const units = safeCount(item);
         const row = basisRow(rows, key, itemName(item));
@@ -1015,7 +1071,7 @@ export function fifoCostBasis(events: TradeEvent[]): CostBasisResult {
     // Swap: the item leaves inventory, so its lot is consumed, but nothing was
     // earned. Counted apart so it never lands in the margin.
     for (const item of itemsIn(event, "given")) {
-      const key = itemKey(item);
+      const key = baseItemKey(item);
       if (!key) continue;
       const units = safeCount(item);
       consume(lots.get(key) ?? [], units);
@@ -1106,6 +1162,7 @@ export function worthToday(
           key,
           name: label.primary,
           secondary: label.secondary,
+          rank: label.rank,
           units,
           median: null,
           worth: null,
@@ -1166,7 +1223,10 @@ export function loadCategoryOverrides(): Record<string, string> {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === "string" && value.trim()) out[key] = value.trim();
+      if (typeof value !== "string") continue;
+      // An exactly empty entry is a cleared row, not junk: it blocks the base-key fallback.
+      if (value.trim()) out[key] = value.trim();
+      else if (value === "") out[key] = "";
     }
     return out;
   } catch {

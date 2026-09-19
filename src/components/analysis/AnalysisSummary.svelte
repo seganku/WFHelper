@@ -19,6 +19,14 @@
 
   const marginPct = $derived(formatPct(basis.estimatedMarginPct, $locale));
 
+  const bestName = $derived(
+    !best
+      ? ""
+      : best.rank == null
+        ? best.name
+        : `${best.name} (${$tr("browse.rankValue", { value: best.rank })})`,
+  );
+
   const items = $derived<SummaryStripItem[]>([
     {
       key: "platIn",
@@ -58,7 +66,7 @@
     {
       key: "best",
       label: $tr("analysis.bestSeller"),
-      value: best ? best.name : $tr("common.none"),
+      value: best ? bestName : $tr("common.none"),
       subtext: best
         ? $tr("analysis.bestSellerDetail", {
             units: best.units,
@@ -72,7 +80,6 @@
 <div class="flex flex-col gap-2" data-analysis-summary>
   <SummaryStrip {items} variant="grid" />
 
-  <!-- Never let the margin tile stand without its caveats. -->
   <div
     class="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-text-muted"
     data-analysis-estimate-note

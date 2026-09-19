@@ -17,6 +17,7 @@ const READY_TIMEOUT_MS = 60_000;
 const EMITTER_TIMEOUT_MS = 60_000;
 const POST_EMIT_GRACE_MS = 2_000;
 const SUMMARY_TIMEOUT_MS = 20_000;
+const BLOCKED_RELEASE_BUDGET_MS = 3_000;
 
 function log(msg) {
   console.log(`[dbwin-regression] ${msg}`);
@@ -73,6 +74,9 @@ async function cleanup() {
 
 const hostEvents = [];
 let decoyDone = false;
+let decoyParked = false;
+let blockedWaitMs = null;
+let blockedWaitRc = null;
 let summary = null;
 
 function waitFor(predicate, timeoutMs, label) {
@@ -151,6 +155,12 @@ async function main() {
     decoy,
     (line) => {
       if (line.includes("EMITTER_DONE")) decoyDone = true;
+      if (line.includes("EMITTER_PARKED")) decoyParked = true;
+      const blocked = /BLOCKED_WAIT_MS=(\d+) rc=(\d+)/.exec(line);
+      if (blocked) {
+        blockedWaitMs = Number(blocked[1]);
+        blockedWaitRc = Number(blocked[2]);
+      }
       if (line.includes("EMITTER_TIMEOUT")) fail("emitter never saw the DBWIN reader");
     },
     "[decoy]",
@@ -172,11 +182,13 @@ async function main() {
     fail("private DBWIN objects already existed");
   }
 
-  await waitFor(() => decoyDone, EMITTER_TIMEOUT_MS, "emitter done");
-  log(`emitter done (${MATCHING_SENDS} matching sends), grace ${POST_EMIT_GRACE_MS}ms`);
+  await waitFor(() => decoyParked, EMITTER_TIMEOUT_MS, "emitter parked");
+  log(`emitter parked after ${MATCHING_SENDS} matching sends, grace ${POST_EMIT_GRACE_MS}ms`);
   await new Promise((r) => setTimeout(r, POST_EMIT_GRACE_MS));
 
   fs.writeFileSync(stopFile, "stop");
+  await waitFor(() => blockedWaitMs !== null, SUMMARY_TIMEOUT_MS, "blocked writer released");
+  await waitFor(() => decoyDone, SUMMARY_TIMEOUT_MS, "emitter done");
   await waitFor(() => summary, SUMMARY_TIMEOUT_MS, "host summary");
   const hostExit = await waitFor(
     () => (host.exitCode !== null ? { code: host.exitCode } : null),
@@ -204,11 +216,22 @@ async function main() {
   if (summary.matching < MATCHING_SENDS) {
     problems.push(`only ${summary.matching}/${MATCHING_SENDS} deliveries matched the trade line`);
   }
+  // Teardown has to signal BUFFER_READY. Without it the game's logging thread
+  // waits out the Win32 ten second timeout and the whole game freezes.
+  if (blockedWaitRc !== 0 || blockedWaitMs === null || blockedWaitMs > BLOCKED_RELEASE_BUDGET_MS) {
+    problems.push(
+      `blocked writer waited ${blockedWaitMs ?? "forever"}ms rc=${blockedWaitRc} for teardown ` +
+        `(want rc=0 within ${BLOCKED_RELEASE_BUDGET_MS}ms)`,
+    );
+  }
 
   if (problems.length > 0) {
     fail(problems.join(" | "));
   }
-  log(`PASS: ${summary.lines} lines delivered for ${MATCHING_SENDS} sends, clean stop, no crash`);
+  log(
+    `PASS: ${summary.lines} lines delivered for ${MATCHING_SENDS} sends, clean stop, no crash, ` +
+      `blocked writer released in ${blockedWaitMs}ms`,
+  );
   await cleanup();
   process.exit(0);
 }

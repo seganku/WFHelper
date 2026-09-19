@@ -150,8 +150,6 @@ export function parseInventory(
     const englishName = modular
       ? modular.name
       : canonicalBuildPartName(internalName, resolved.name);
-    // The renderer prefers displayName, so a build has to carry the naming
-    // part's localized name or none at all; the base row's would be generic.
     const localizedName = modular ? modular.displayName : resolved.displayName;
 
     const dbDucats =
@@ -163,10 +161,9 @@ export function parseInventory(
       ? `${internalName}#b${instanceId ?? modular.partNames.join("|")}`
       : toRankedInstanceKey(internalName, group, rank, maxRank);
 
-    // For recipe paths the catalog is the authority: WFM lists the exact
-    // uniqueName it trades (frame parts only as ...Blueprint, weapon parts
-    // bare), so a crafted ...Component never shows as sellable. The item-DB
-    // flag covers the row until the catalog has loaded.
+    // For recipe paths the catalog is the authority: WFM lists the exact uniqueName
+    // it trades (frame parts only as ...Blueprint, weapon parts bare), so a crafted
+    // ...Component never shows as sellable.
     const catalogTradable = recipePath
       ? marketGameRefs.size > 0
         ? marketListed
@@ -190,6 +187,7 @@ export function parseInventory(
 
     const nextItem: ParsedItem = {
       name: englishName,
+      ...(!modular && resolved.nameIsFallback ? { nameIsFallback: true as const } : {}),
       ...(localizedName ? { displayName: localizedName } : {}),
       ...(resolved.cardArt ? { cardArt: true as const } : {}),
       internalName,

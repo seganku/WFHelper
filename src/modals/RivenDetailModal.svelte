@@ -45,7 +45,6 @@
   let isLoggedIn = $state(false);
   let bestAttrs = $state<RivenBestAttributes | null>(null);
   let dictionaryUpdatedAt = $state<string | null>(null);
-  /** Suppresses a "never downloaded" flash before the first answer arrives. */
   let dictionaryChecked = $state(false);
   let refreshingDictionary = $state(false);
   let showAllListings = $state(false);
@@ -119,8 +118,6 @@
       });
   });
 
-  // A weapon absent from a stale sheet answers null, so the refresh has to be
-  // reachable without a loaded entry.
   async function refreshDictionary(): Promise<void> {
     if (refreshingDictionary) return;
     refreshingDictionary = true;
@@ -229,8 +226,6 @@
     if (e.key === "Escape") onclose();
   }
 
-  // Match only buffs, using canonical names so melee and ranged labels still
-  // agree without allowing curses to light positive chips.
   const myStatNamesLc = $derived(
     new Set(riven.stats.filter((s) => s.positive).map((s) => canonicalRivenStatName(s.name))),
   );
@@ -239,7 +234,15 @@
   const rivenTypeKey = $derived(RIVEN_TYPE_KEYS[riven.rivenType]);
   const rivenTypeLabel = $derived(rivenTypeKey ? $tr(rivenTypeKey) : riven.rivenType);
   const attrGradeKey = $derived(RIVEN_ATTR_GRADE_KEYS[riven.attributeGrade]);
-  const attrGradeLabel = $derived(attrGradeKey ? $tr(attrGradeKey) : riven.attributeGrade);
+  const attrGradeLabel = $derived(
+    attrGradeKey
+      ? $tr(attrGradeKey)
+      : riven.attributeGrade === "?"
+        ? $tr("rivens.grade.unrated")
+        : riven.attributeGrade,
+  );
+  const hasRollGrade = $derived(riven.overallGrade !== "");
+  const hasAttrGrade = $derived(riven.attributeGrade !== "");
   const listingErrorText = $derived(
     listingErrorRaw || (listingErrorKey ? $tr(listingErrorKey) : ""),
   );
@@ -275,7 +278,7 @@
         <h2 class="font-display text-4xl font-bold text-text-heading m-0">
           {riven.rivenName || riven.weaponName}
         </h2>
-        {#if !isContractListing}
+        {#if hasRollGrade}
           <span
             class="font-display text-4xl font-extrabold shrink-0"
             style="color: {gradeColor(riven.overallGrade)}">{riven.overallGrade}</span
@@ -317,54 +320,63 @@
     </div>
 
     <div>
-      {#if !isContractListing}
-        <div class="grid grid-cols-2 gap-4 mb-5">
-          <div
-            class="flex flex-col items-center p-4 bg-bg-surface border border-border rounded-lg gap-1"
-          >
-            <span class="font-display text-xs uppercase tracking-[0.08em] text-text-muted"
-              >{$tr("rivens.detail.rollQuality")}</span
+      {#if hasRollGrade || hasAttrGrade}
+        <div class="grid gap-4 mb-5 {hasRollGrade && hasAttrGrade ? 'grid-cols-2' : 'grid-cols-1'}">
+          {#if hasRollGrade}
+            <div
+              class="flex flex-col items-center p-4 bg-bg-surface border border-border rounded-lg gap-1"
             >
-            <span
-              class="font-display text-3xl font-extrabold"
-              style="color: {gradeColor(riven.overallGrade)}">{riven.overallGrade}</span
-            >
-            <span class="text-xs text-text-secondary"
-              >{$tr("rivens.detail.percentPerfect", {
-                pct: Math.round(riven.statPerfectness * 100),
-              })}</span
-            >
-          </div>
-          <div
-            class="flex flex-col items-center p-4 bg-bg-surface border border-border rounded-lg gap-1"
-          >
-            <span class="font-display text-xs uppercase tracking-[0.08em] text-text-muted"
-              >{$tr("common.attributes")}</span
-            >
-            <span
-              class="font-display text-3xl font-extrabold"
-              style="color: {attrGradeColor(riven.attributeGrade)}">{attrGradeLabel}</span
-            >
-            <span class="text-xs text-text-secondary">
-              {riven.stats.filter((s) => s.positive).length !== 1
-                ? $tr("rivens.detail.buffsCount", {
-                    count: riven.stats.filter((s) => s.positive).length,
-                  })
-                : $tr("rivens.detail.buffCount", {
-                    count: riven.stats.filter((s) => s.positive).length,
-                  })}
-              {#if riven.stats.some((s) => !s.positive)}, {$tr("rivens.detail.oneCurse")}{/if}
-            </span>
-            {#if dissolveEndo !== null}
-              <span
-                class="mt-1 inline-flex items-center gap-1 text-xs text-text-muted"
-                data-riven-dissolve-endo={dissolveEndo}
+              <span class="font-display text-xs uppercase tracking-[0.08em] text-text-muted"
+                >{$tr("rivens.detail.rollQuality")}</span
               >
-                <img src={STAT_ICON_URLS.endoDelta} alt="" class="h-3 w-3" />
-                {$tr("rivens.dissolveValue", { endo: dissolveEndo })}
+              <span
+                class="font-display text-3xl font-extrabold"
+                style="color: {gradeColor(riven.overallGrade)}"
+                data-riven-detail-grade={riven.overallGrade}>{riven.overallGrade}</span
+              >
+              <span class="text-xs text-text-secondary"
+                >{$tr("rivens.detail.percentPerfect", {
+                  pct: Math.round(riven.statPerfectness * 100),
+                })}</span
+              >
+            </div>
+          {/if}
+          {#if hasAttrGrade}
+            <div
+              class="flex flex-col items-center p-4 bg-bg-surface border border-border rounded-lg gap-1"
+            >
+              <span class="font-display text-xs uppercase tracking-[0.08em] text-text-muted"
+                >{$tr("common.attributes")}</span
+              >
+              <span
+                class="font-display text-3xl font-extrabold"
+                style="color: {attrGradeColor(riven.attributeGrade)}"
+                title={riven.attributeGrade === "?"
+                  ? $tr("rivens.detail.noGoodRollData")
+                  : undefined}
+                data-riven-detail-attr-grade={riven.attributeGrade}>{attrGradeLabel}</span
+              >
+              <span class="text-xs text-text-secondary">
+                {riven.stats.filter((s) => s.positive).length !== 1
+                  ? $tr("rivens.detail.buffsCount", {
+                      count: riven.stats.filter((s) => s.positive).length,
+                    })
+                  : $tr("rivens.detail.buffCount", {
+                      count: riven.stats.filter((s) => s.positive).length,
+                    })}
+                {#if riven.stats.some((s) => !s.positive)}, {$tr("rivens.detail.oneCurse")}{/if}
               </span>
-            {/if}
-          </div>
+              {#if dissolveEndo !== null && !isContractListing}
+                <span
+                  class="mt-1 inline-flex items-center gap-1 text-xs text-text-muted"
+                  data-riven-dissolve-endo={dissolveEndo}
+                >
+                  <img src={STAT_ICON_URLS.endoDelta} alt="" class="h-3 w-3" />
+                  {$tr("rivens.dissolveValue", { endo: dissolveEndo })}
+                </span>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -394,7 +406,7 @@
                   >{stat.name}</span
                 >
               </div>
-              {#if !isContractListing}
+              {#if stat.grade}
                 <div class="w-[100px] h-[6px] bg-bg-raised rounded-[3px] shrink-0 overflow-hidden">
                   <div
                     class="h-full rounded-sm transition-[width] duration-300 {stat.positive
@@ -408,7 +420,8 @@
                 </div>
                 <span
                   class="font-display font-bold text-base min-w-6 text-center shrink-0"
-                  style="color: {gradeColor(stat.grade)}">{stat.grade}</span
+                  style="color: {gradeColor(stat.grade)}"
+                  data-riven-stat-grade={stat.grade}>{stat.grade}</span
                 >
               {/if}
             </div>

@@ -1,5 +1,4 @@
-// Reverses browse.wf/calamity RivenParser.js display values to roll floats before grading.
-// The forward formulas are inverted in unparseBuff and unparseCurse.
+// Inverts browse.wf/calamity RivenParser.js display values back to roll floats.
 
 import { withScope } from "./logger";
 import * as rivenData from "./rivenData";
@@ -33,8 +32,8 @@ export interface RivenGradeResult {
   attributeGrade: string;
 }
 
-/** Default riven max rank. Most rivens are rank 8 (lvl 0..8). */
-const DEFAULT_LVL = 8;
+/** Rivens are rank 8 (lvl 0..8). */
+export const MAX_RIVEN_MOD_RANK = 8;
 
 /** RivenParser.js thresholds map lerp(-10, 10, rollFloat) to letter grades. */
 const GRADE_THRESHOLDS: { min: number; grade: string }[] = [
@@ -55,7 +54,6 @@ function inverseLerp(a: number, b: number, v: number): number {
   return (v - a) / (b - a);
 }
 
-/** Converts a roll float to a grade, inverting curses so lower magnitude grades higher. */
 export function floatToGrade(rollFloat: number, isCurse: boolean): string {
   const f = isCurse ? 1 - rollFloat : rollFloat;
   const score = lerp(-10, 10, f);
@@ -74,28 +72,12 @@ export function unparseBuff(
   numBuffs: number,
   numCurses: number,
   tag?: string,
-  lvl: number = DEFAULT_LVL,
-): number {
-  return clamp01(
-    unparseBuffRaw(displayedValue, baseValue, disposition, numBuffs, numCurses, tag, lvl),
-  );
-}
-
-/** Same as unparseBuff but unclamped - out-of-range floats reveal a dispo misfit. */
-function unparseBuffRaw(
-  displayedValue: number,
-  baseValue: number,
-  disposition: number,
-  numBuffs: number,
-  numCurses: number,
-  tag?: string,
-  lvl: number = DEFAULT_LVL,
+  lvl: number = MAX_RIVEN_MOD_RANK,
 ): number {
   const buffsAtten = NUM_BUFFS_ATTEN[Math.min(numBuffs, NUM_BUFFS_ATTEN.length - 1)];
   const curseAtten = Math.pow(1.25, numCurses);
   const attenuation = SPECIFIC_FIT_ATTEN * disposition * BASE_DRAIN;
 
-  // Convert displayed value to raw multiplier
   let value: number;
   if (tag && NON_PERCENTAGE_TAGS.has(tag)) {
     value = displayedValue;
@@ -125,22 +107,7 @@ export function unparseCurse(
   numBuffs: number,
   numCurses: number,
   tag?: string,
-  lvl: number = DEFAULT_LVL,
-): number {
-  return clamp01(
-    unparseCurseRaw(displayedValue, baseValue, disposition, numBuffs, numCurses, tag, lvl),
-  );
-}
-
-/** Same as unparseCurse but unclamped - out-of-range floats reveal a dispo misfit. */
-function unparseCurseRaw(
-  displayedValue: number,
-  baseValue: number,
-  disposition: number,
-  numBuffs: number,
-  numCurses: number,
-  tag?: string,
-  lvl: number = DEFAULT_LVL,
+  lvl: number = MAX_RIVEN_MOD_RANK,
 ): number {
   const attenuation = SPECIFIC_FIT_ATTEN * disposition * BASE_DRAIN;
   // Note the swapped indexing: buffs table by curse count, curse table by buff count
@@ -148,7 +115,6 @@ function unparseCurseRaw(
   const buffsInCurseTable =
     NUM_BUFFS_CURSE_ATTEN[Math.min(numBuffs, NUM_BUFFS_CURSE_ATTEN.length - 1)];
 
-  // Convert displayed value to raw multiplier (absolute value)
   let value: number;
   if (tag && NON_PERCENTAGE_TAGS.has(tag)) {
     value = Math.abs(displayedValue);
@@ -164,7 +130,6 @@ function unparseCurseRaw(
   value /= buffsInCurseTable;
   value /= attenuation;
   value /= Math.abs(baseValue);
-  // OCR is already absolute, so abs(baseValue) replaces division by baseValue then -1.
 
   return (value - 0.9) / 0.2;
 }
@@ -177,8 +142,8 @@ interface ScannedStat {
   multiplier?: boolean;
 }
 
-// Sibling tags an OCR-garbled stat name can actually be ("+190.2% Critical
-// Damage" on a melee is really Melee Damage). Checked by value plausibility.
+// Sibling tags an OCR-garbled stat name can be: "+190.2% Critical Damage" on a
+// melee is really Melee Damage.
 const STAT_CONFUSION_SIBLINGS: Record<string, string[]> = {
   WeaponDamageAmountMod: ["WeaponMeleeDamageMod", "WeaponCritDamageMod"],
   WeaponMeleeDamageMod: ["WeaponDamageAmountMod", "WeaponCritDamageMod"],
@@ -188,27 +153,23 @@ const STAT_CONFUSION_SIBLINGS: Record<string, string[]> = {
   WeaponStunChanceMod: ["WeaponCritChanceMod"],
 };
 
-// Riven type data lists both damage tags with identical bases, but cards use one by class.
-// Normalize to the card's form before checking its numeric range.
+// Riven type data lists both damage tags with identical bases; cards use one by class.
 function weaponDamageTag(tag: string, isMelee: boolean): string {
   if (isMelee && tag === "WeaponDamageAmountMod") return "WeaponMeleeDamageMod";
   if (!isMelee && tag === "WeaponMeleeDamageMod") return "WeaponDamageAmountMod";
   return tag;
 }
 
-// Display values round to 0.1%, so a legitimate min/max roll can sit a hair
-// outside [0,1]. Shared by the OCR correction pass and the dispo/rank refit.
+// Display values round to 0.1%, so a legitimate min/max roll can sit a hair outside [0,1].
 const FIT_TOLERANCE = 0.02;
-// Only rename when the parsed stat is clearly impossible, not merely marginal.
 const CORRECTION_MISFIT_THRESHOLD = 0.1;
 
 // A riven card carries at most three buffs and one curse.
 const MAX_RIVEN_BUFFS = 3;
 const MAX_RIVEN_CURSES = 1;
 
-// Both counts scale every displayed value, so an OCR line the scan dropped
-// pushes the whole card out of range. Treat the scanned counts as a lower
-// bound and accept any name that fits a card this scan could be a subset of.
+// Both counts scale every displayed value, so an OCR line the scan dropped reads
+// the survivors high; the scanned counts are a lower bound.
 function plausibleStatCounts(numBuffs: number, numCurses: number): [number, number][] {
   const counts: [number, number][] = [];
   for (let buffs = numBuffs; buffs <= Math.max(numBuffs, MAX_RIVEN_BUFFS); buffs++) {
@@ -219,8 +180,6 @@ function plausibleStatCounts(numBuffs: number, numCurses: number): [number, numb
   return counts;
 }
 
-// Rename an impossible OCR stat only when exactly one confusion sibling fits.
-// Keep and log uncorrectable misfits.
 export function correctScannedStats(
   weaponName: string,
   stats: ScannedStat[],
@@ -241,8 +200,7 @@ export function correctScannedStats(
     ...rivenData.getFamilyVariants(weaponName).map((v) => v.disposition),
   ];
 
-  // Best-case violation across family variants; null when the tag cannot roll
-  // on this weapon at all (absent from the riven type or wrong polarity).
+  // Null when the tag cannot roll on this weapon at all.
   const violationFor = (tag: string, stat: ScannedStat, displayedValue: number): number | null => {
     const entry = rivenData.findUpgradeEntry(rivenTypeKey, tag);
     if (!entry) return null;
@@ -250,12 +208,11 @@ export function correctScannedStats(
     let best = Infinity;
     for (const disp of dispositions) {
       for (const [numBuffs, numCurses] of statCounts) {
-        // Every rank, not just max: a chat-linked card shows its values at the
-        // mod's own rank, and a partly ranked stat is not a misread label.
-        for (let lvl = 0; lvl <= DEFAULT_LVL; lvl++) {
+        // A chat-linked card shows its values at the mod's own rank, not max.
+        for (let lvl = 0; lvl <= MAX_RIVEN_MOD_RANK; lvl++) {
           const f = stat.positive
-            ? unparseBuffRaw(displayedValue, entry.baseValue, disp, numBuffs, numCurses, tag, lvl)
-            : unparseCurseRaw(displayedValue, entry.baseValue, disp, numBuffs, numCurses, tag, lvl);
+            ? unparseBuff(displayedValue, entry.baseValue, disp, numBuffs, numCurses, tag, lvl)
+            : unparseCurse(displayedValue, entry.baseValue, disp, numBuffs, numCurses, tag, lvl);
           best = Math.min(best, Math.max(0, f - 1) + Math.max(0, -f));
         }
       }
@@ -265,9 +222,6 @@ export function correctScannedStats(
 
   let corrections = 0;
 
-  // Categorical renames run first: they are label rules, not value checks, and
-  // the normalized tag is what the range check measures. They stay provisional
-  // until the card is accepted, because they encode the detected weapon's class.
   const measured = stats.map((original) => {
     const scannedTag = rivenData.statNameToTag(original.name);
     let stat = original;
@@ -298,9 +252,6 @@ export function correctScannedStats(
     };
   });
 
-  // A misread name is one outlier on a card that otherwise fits. Several stats
-  // out of range at once means the weapon or its disposition is wrong, and
-  // renaming one of them would only bake that in.
   const misfitting = measured.filter((m) => m.misfits);
   if (misfitting.length > 1) {
     const detail = misfitting
@@ -358,7 +309,6 @@ export function correctScannedStats(
   return { stats: corrected, corrections };
 }
 
-/** Scores each attribute as Decisive, Good, Bad, or NotHelping. */
 type AlecaAttrGrade = "Decisive" | "Good" | "NotHelping" | "Bad";
 
 function gradeFromGoodRolls(
@@ -369,7 +319,6 @@ function gradeFromGoodRolls(
   const positive: AlecaAttrGrade[] = goodTags.map(() => "NotHelping");
   const negative: AlecaAttrGrade[] = badTags.map(() => "NotHelping");
 
-  // Negative grades.
   for (let i = 0; i < badTags.length; i++) {
     const tag = badTags[i];
     if (data.acceptedBadAttrs.includes(tag)) {
@@ -381,7 +330,6 @@ function gradeFromGoodRolls(
     }
   }
 
-  // Positive grades.
   for (let i = 0; i < goodTags.length; i++) {
     const tag = goodTags[i];
     if (data.goodAttrs.some((g) => g.mandatory.includes(tag))) {
@@ -393,8 +341,6 @@ function gradeFromGoodRolls(
     }
   }
 
-  // Does at least one full GoodRoll match? (all mandatory present, and the
-  // user's positives are a subset of mandatory or optional)
   const goodSet = new Set(goodTags);
   const matches = data.goodAttrs.filter((g) => {
     if (!g.mandatory.every((m) => goodSet.has(m))) return false;
@@ -407,7 +353,6 @@ function gradeFromGoodRolls(
   const hasNotHelpingNeg = negative.some((n) => n === "NotHelping");
   const hasAnyNeg = negative.length > 0;
 
-  // Flatten the detailed result to the 4-level UI scale already in use.
   let overall: string;
   if (hasBadNeg) {
     overall = (flag && num >= 2) || num >= 3 ? "OK" /* HasPotential */ : "Bad";
@@ -443,7 +388,8 @@ export function computeAttributeGrade(
   return gradeFromGoodRolls(data, goodTags, badTags).overall;
 }
 
-/** Grades OCR stats, or returns null when the weapon or riven type is unknown. */
+/** `modRank` is the rank a warframe.market listing states, dropped again when the
+ *  values contradict it. */
 export function gradeRiven(
   weaponName: string,
   stats: {
@@ -453,6 +399,7 @@ export function gradeRiven(
     value: number | null;
     multiplier?: boolean;
   }[],
+  modRank?: number | null,
 ): RivenGradeResult | null {
   if (!stats || stats.length === 0) return null;
 
@@ -468,16 +415,16 @@ export function gradeRiven(
     return null;
   }
 
-  // Count buffs and curses
   const numBuffs = stats.filter((s) => s.positive).length;
   const numCurses = stats.filter((s) => !s.positive).length;
-  let assumedLevel = DEFAULT_LVL;
-  // Both counts scale every displayed value, so a line the scan lost reads the
-  // survivors high. The scanned counts are a lower bound, as in correctScannedStats.
+  const statedRank =
+    modRank != null && Number.isInteger(modRank) && modRank >= 0 && modRank <= MAX_RIVEN_MOD_RANK
+      ? modRank
+      : null;
+  let assumedLevel = statedRank ?? MAX_RIVEN_MOD_RANK;
   let assumedBuffs = numBuffs;
   let assumedCurses = numCurses;
 
-  // Reject impossible shapes before invalid values are clamped into valid grades.
   if (numBuffs > 3 || numCurses > 1) {
     log.warn(
       `[RivenGrade] impossible stat shape (${numBuffs} buffs / ${numCurses} curses) - skipping grade`,
@@ -485,22 +432,17 @@ export function gradeRiven(
     return null;
   }
 
-  // Precomputed once per stat; the dispo and rank search below re-reads it
-  // for every candidate combination.
   const prepared = stats.map((stat) => {
     const tag = rivenData.statNameToTag(stat.name);
     const entry = tag ? rivenData.findUpgradeEntry(rivenTypeKey, tag) : null;
     const isFraction = !!tag && NON_PERCENTAGE_TAGS.has(tag);
     let displayedValue: number | null = null;
-    // Half a display step, in the same units as displayedValue - the card shows
-    // one decimal, or two for an x-multiplier.
+    // Half a display step: the card shows one decimal, two for an x-multiplier.
     let halfStep = 0.05;
     if (stat.value != null && Number.isFinite(stat.value)) {
       if (stat.multiplier) {
-        // "x1.05" is a +0.05 multiplier, and faction damage is a non-percentage
-        // tag whose displayed value IS that fraction (browse.wf: "0.05 to 0.06
-        // Damage to Corpus"). Scaling it by 100 here counted the scale twice and
-        // pinned every scanned faction roll to the top or bottom of its range.
+        // "x1.05" is a +0.05 multiplier, and faction damage is a non-percentage tag
+        // whose displayed value IS that fraction (browse.wf: "0.05 to 0.06 Damage to Corpus").
         const fraction = stat.positive ? stat.value - 1 : 1 - stat.value;
         displayedValue = isFraction ? fraction : fraction * 100;
         halfStep = isFraction ? 0.005 : 0.5;
@@ -521,13 +463,11 @@ export function gradeRiven(
     value: number = p.displayedValue!,
   ): number =>
     p.stat.positive
-      ? unparseBuffRaw(value, p.entry!.baseValue, disp, buffs, curses, p.tag!, lvl)
-      : unparseCurseRaw(value, p.entry!.baseValue, disp, buffs, curses, p.tag!, lvl);
+      ? unparseBuff(value, p.entry!.baseValue, disp, buffs, curses, p.tag!, lvl)
+      : unparseCurse(value, p.entry!.baseValue, disp, buffs, curses, p.tag!, lvl);
 
-  // On a wide stat the card's rounding is noise, but Wolf Sledge Range spans
-  // 0.2 to 0.3 metres at rank 0, so half a step is half the roll. Ask whether
-  // the rounding interval can reach [0,1] rather than whether one nominal value
-  // lands inside it.
+  // Wolf Sledge Range spans 0.2 to 0.3 metres at rank 0, so half a display step is
+  // half the roll: ask whether the rounding interval can reach [0,1].
   const fitsAt = (
     p: Prepared,
     disp: number,
@@ -540,15 +480,11 @@ export function gradeRiven(
     return Math.min(a, b) <= 1 + FIT_TOLERANCE && Math.max(a, b) >= -FIT_TOLERANCE;
   };
 
-  // Two things the card does not tell us: the roll screen names the family but
-  // uses the linked variant's disposition, and a chat-linked mod shows its values
-  // at its own rank. An unranked card reads 1/9 of max, so grading it at rank 8
-  // scores every stat F. Search rank and disposition together before grading.
+  // The roll screen names the family but uses the linked variant's disposition, and a
+  // chat-linked mod shows its values at its own rank: an unranked card reads 1/9 of max.
   let disposition = baseDisposition;
   const gradeable = prepared.filter((p) => p.tag && p.entry && p.displayedValue != null);
   if (gradeable.length > 0) {
-    // Sum of how far out of [0,1] the card sits, for ranking near-misses when
-    // nothing fits outright.
     const violationAt = (disp: number, lvl: number, buffs: number, curses: number): number =>
       gradeable.reduce((sum, p) => {
         const f = rawFloatAt(p, disp, lvl, buffs, curses);
@@ -563,10 +499,15 @@ export function gradeRiven(
         ...rivenData.getFamilyVariants(weaponName),
       ];
 
-      // Highest rank first, so a card that fits at max rank is never demoted
-      // just because a lower rank happens to fit as well. Needs two stats to
-      // pin a rank - a lone value fits several, and picking one is a guess.
-      const maxRefitLvl = gradeable.length >= 2 ? DEFAULT_LVL : -1;
+      // Two stats are needed to pin a rank; a lone value fits several.
+      const searchLvls =
+        gradeable.length >= 2
+          ? Array.from({ length: MAX_RIVEN_MOD_RANK + 1 }, (_, index) => MAX_RIVEN_MOD_RANK - index)
+          : [];
+      const refitLvls =
+        statedRank != null
+          ? [statedRank, ...searchLvls.filter((lvl) => lvl !== statedRank)]
+          : searchLvls;
       type Refit = {
         name: string;
         disposition: number;
@@ -575,7 +516,7 @@ export function gradeRiven(
         curses: number;
       };
       const refitAt = (buffs: number, curses: number): Refit | null => {
-        for (let lvl = maxRefitLvl; lvl >= 0; lvl--) {
+        for (const lvl of refitLvls) {
           let best: Refit | null = null;
           for (const candidate of candidates) {
             if (!allFitAt(candidate.disposition, lvl, buffs, curses)) continue;
@@ -590,8 +531,6 @@ export function gradeRiven(
         return null;
       };
 
-      // The scanned counts come first, so a card that fits as read is never
-      // re-read as one the scan took a line off.
       let refit: Refit | null = null;
       for (const [buffs, curses] of plausibleStatCounts(numBuffs, numCurses)) {
         refit = refitAt(buffs, curses);
@@ -620,9 +559,6 @@ export function gradeRiven(
           assumedCurses = refit.curses;
         }
       } else {
-        // Nothing fits exactly - keep max rank and settle for the least violating
-        // dispo and stat counts. Scanned counts come first, so widening has to
-        // strictly improve the fit before it is taken.
         let best = {
           name: weaponName,
           disposition,
@@ -671,6 +607,8 @@ export function gradeRiven(
   const gradedStats: GradedStat[] = [];
   let scoreSum = 0;
   let scoredCount = 0;
+  let scoredBuffs = 0;
+  let clampedBuffs = 0;
 
   for (const p of prepared) {
     const { stat, tag, entry } = p;
@@ -700,10 +638,13 @@ export function gradeRiven(
         grade,
         rollFloat,
       });
+      if (stat.positive) {
+        scoredBuffs++;
+        if (rollFloat === 0 || rollFloat === 1) clampedBuffs++;
+      }
       scoreSum += score;
       scoredCount++;
     } else {
-      // No value - can't grade, assign mid-range
       gradedStats.push({
         ...stat,
         grade: "?",
@@ -712,7 +653,13 @@ export function gradeRiven(
     }
   }
 
-  // Overall grade = average of all stat scores
+  // Every buff pinned to the edge of its range contradicts the graded rank; a quarter
+  // of the unranked listings carry max-rank rolls.
+  if (statedRank != null && scoredBuffs > 0 && clampedBuffs === scoredBuffs) {
+    const searched = gradeRiven(weaponName, stats);
+    if (searched) return searched;
+  }
+
   let overallGrade = "?";
   if (scoredCount > 0) {
     const avgScore = scoreSum / scoredCount;
@@ -720,7 +667,6 @@ export function gradeRiven(
     overallGrade = floatToGrade(avgFloat, false);
   }
 
-  // Attribute-based grade (Great/Good/OK/Bad)
   const attributeGrade = computeAttributeGrade(stats, weaponName);
 
   return { stats: gradedStats, overallGrade, attributeGrade };

@@ -177,6 +177,7 @@ function buildComponentAliasUniqueNames(uniqueName: string = ""): string[] {
 
 interface ItemEntry extends MarketAcquisition {
   name: string;
+  nameIsFallback?: true;
   category: string;
   imageUrl: string | null;
   browseWfUrl?: string | null;
@@ -288,6 +289,8 @@ function loadPublicExportPlus(): number {
       return BROWSE_WF + iconPath;
     }
 
+    const VOID_PROJECTION_RE = /VoidProjection/i;
+
     const exportMappings = [
       { exportKey: "ExportWarframes", category: "Warframe" },
       { exportKey: "ExportWeapons", category: "Weapon" },
@@ -332,16 +335,18 @@ function loadPublicExportPlus(): number {
 
         // Recipes have no name - resolve via resultType (e.g. "Sands of Inaros Blueprint")
         let recipeName: string | null = null;
+        let recipeNameIsFallback = false;
         if (exportKey === "ExportRecipes" && !item.name && item.resultType) {
           const resultEntry = itemsByUniqueName[item.resultType];
-          if (resultEntry?.name) recipeName = `${resultEntry.name} Blueprint`;
+          if (resultEntry?.name) {
+            recipeName = `${resultEntry.name} Blueprint`;
+            recipeNameIsFallback = resultEntry.nameIsFallback === true;
+          }
         }
 
+        const sourceName = relicName || recipeName || resolveName(item.name);
         const resolvedName = sanitizeDisplayName(
-          relicName ||
-            recipeName ||
-            resolveName(item.name) ||
-            fallbackNameFromUniqueName(uniqueName),
+          sourceName || fallbackNameFromUniqueName(uniqueName),
         );
 
         const pepDucats =
@@ -362,11 +367,19 @@ function loadPublicExportPlus(): number {
             ? item.name
             : null;
 
+        // DE lists relics the bundled package lacks only under ExportResources.
+        // Bundled rows keep their own category, base projection types included.
+        const itemCategory =
+          category === "Resource" && !baseData?.[uniqueName] && VOID_PROJECTION_RE.test(uniqueName)
+            ? "Relic"
+            : category;
+
         itemsByUniqueName[uniqueName] = {
           name: resolvedName,
+          ...(!sourceName || recipeNameIsFallback ? { nameIsFallback: true as const } : {}),
           nameKey,
-          category,
-          imageUrl: wikiCardArtUrl(uniqueName, category, resolvedName),
+          category: itemCategory,
+          imageUrl: wikiCardArtUrl(uniqueName, itemCategory, resolvedName),
           browseWfUrl: resolveIcon(item.icon) || recipeIcon,
           isPrime: resolvedName.includes("Prime"),
           masteryReq: item.masteryReq || 0,
@@ -517,10 +530,12 @@ function loadWfcdItems(): number {
               if (
                 componentEntry.name &&
                 (!existingComponent.name ||
+                  existingComponent.nameIsFallback ||
                   String(existingComponent.name).startsWith("/Lotus/") ||
                   componentLooksLikePart)
               ) {
                 existingComponent.name = componentEntry.name;
+                delete existingComponent.nameIsFallback;
               }
 
               if (!existingComponent.imageUrl && componentEntry.imageUrl) {
@@ -569,6 +584,7 @@ function loadWfcdItems(): number {
                 const aliasName = buildComponentDisplayName(item.name, comp.name, true);
                 if (aliasName) {
                   existingBlueprint.name = aliasName;
+                  delete existingBlueprint.nameIsFallback;
                 }
 
                 const aliasWfcdImageUrl = buildWfcdImageUrl(comp.imageName) || wfcdImageUrl;
@@ -619,9 +635,10 @@ function loadWfcdItems(): number {
           wfcdImageUrl,
         );
 
-        if (existing.name.startsWith("/Lotus/") && item.name) {
+        if ((existing.nameIsFallback || existing.name.startsWith("/Lotus/")) && item.name) {
           const cleanedName = sanitizeDisplayName(item.name);
           existing.name = cleanedName;
+          delete existing.nameIsFallback;
           existing.isPrime = cleanedName.includes("Prime");
         }
 
@@ -730,7 +747,11 @@ interface PepRecipeItem {
 function buildRecipeIndex(): void {
   try {
     const pep = require("warframe-public-export-plus");
-    const exportData = pep.ExportRecipes;
+    const baseRecipes = pep.ExportRecipes as Record<string, PepRecipeItem> | undefined;
+    const overlayRecipes = publicExportSource.getOverlay()?.exports.ExportRecipes as
+      | Record<string, PepRecipeItem>
+      | undefined;
+    const exportData = overlayRecipes ? { ...overlayRecipes, ...(baseRecipes || {}) } : baseRecipes;
     if (!exportData || typeof exportData !== "object") return;
 
     recipesByResultType = {};
@@ -743,7 +764,8 @@ function buildRecipeIndex(): void {
       if (!item.resultType || !Array.isArray(item.ingredients)) continue;
       resultTypeByBlueprint[recipeKey] = item.resultType;
       if (item.consumeOnUse === false) reusableBlueprints.add(recipeKey);
-      if (item.excludeFromMarket !== true) {
+      // DE's raw export has no market fields, so an overlay-only recipe cannot claim one.
+      if (baseRecipes?.[recipeKey] && item.excludeFromMarket !== true) {
         const credits =
           typeof item.creditsCost === "number" && Number.isFinite(item.creditsCost)
             ? item.creditsCost
@@ -839,13 +861,13 @@ function inheritBlueprintDisplayFromResults(): void {
     // Only rename what nothing else named, and only when the result itself
     // resolved - swapping one path-derived name for another gains nothing.
     if (!result.name) continue;
-    if (blueprint.name !== fallbackNameFromUniqueName(blueprintUn)) continue;
-    if (result.name === fallbackNameFromUniqueName(resultUn)) continue;
+    if (!blueprint.nameIsFallback || result.nameIsFallback) continue;
     // A warframe part component is already named "... Chassis Blueprint" - that
     // spelling is the item players own and trade, so appending doubles it.
     const derived = sanitizeDisplayName(
       /\bblueprint$/i.test(result.name) ? result.name : `${result.name} Blueprint`,
     );
+    delete blueprint.nameIsFallback;
     if (derived === blueprint.name) continue;
     blueprint.name = derived;
     blueprint.isPrime = derived.includes("Prime");
@@ -860,6 +882,18 @@ function inheritSentinelWeaponVaulting(): void {
   for (const [weapon, sentinel] of sentinelWeapons) {
     const entry = itemsByUniqueName[weapon];
     if (entry && itemsByUniqueName[sentinel]?.vaulted) entry.vaulted = true;
+  }
+}
+
+// Venari drops from no relic, so WFCD never vaults her.
+const COMPANION_FRAME_PATTERN = /^\/Lotus\/Powersuits\/([^/]+)\/Kavat\/\1(Prime)?KavatPowerSuit$/;
+
+function inheritCompanionFrameVaulting(): void {
+  for (const [uniqueName, entry] of Object.entries(itemsByUniqueName)) {
+    const match = COMPANION_FRAME_PATTERN.exec(uniqueName);
+    if (!match) continue;
+    const frame = itemsByUniqueName[`/Lotus/Powersuits/${match[1]}/${match[1]}${match[2] ?? ""}`];
+    if (frame?.vaulted) entry.vaulted = true;
   }
 }
 
@@ -893,6 +927,7 @@ export function buildDatabase(): void {
   buildRecipeIndex();
   const wfcdCount = loadWfcdItems();
   inheritSentinelWeaponVaulting();
+  inheritCompanionFrameVaulting();
   applyMechPartTradability();
   linkBlueprintsToResults();
   inheritBlueprintDisplayFromResults();
@@ -1068,6 +1103,7 @@ export function getRendererLookup(): Record<string, RendererItemEntry> {
   for (const [key, item] of Object.entries(itemsByUniqueName)) {
     lookup[key] = {
       ...(localizing ? localizedPair(key, item.nameKey, item.name) : { name: item.name }),
+      ...(item.nameIsFallback ? { nameIsFallback: true as const } : {}),
       category: item.category,
       imageUrl: item.imageUrl,
       ...(hasCardArt(item.imageUrl) ? { cardArt: true } : {}),

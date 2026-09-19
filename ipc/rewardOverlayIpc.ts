@@ -43,6 +43,7 @@ import {
   TOGGLE_OVERLAY,
   SIMULATE_RELIC_TRIGGER,
   OVERLAY_PUSH_RELIC_FILTERS,
+  RELIC_REWARD_CONTENT_HEIGHT,
 } from "../config/shared/ipcChannels";
 import { REWARD_OVERLAY_CANVAS } from "../config/shared/rewardOverlayLayout";
 
@@ -69,7 +70,6 @@ const wfmStatsPrice = {
 
 const APP_ROOT = app.getAppPath();
 const OVERLAY_WINDOW_FILE = path.join(APP_ROOT, "renderer", "overlay.html");
-// Prices and ducat meta live in the snapshot cache; price-cache.json is not written.
 const PRICE_CACHE_FILE = userDataPath("snapshot-cache.json");
 
 export const rewardWindowsController = createOverlayWindowsController({
@@ -108,8 +108,7 @@ export const plannerWindowsController = createOverlayWindowsController({
   windowWidth: getOverlayDescriptor("planner").canvas.width,
   windowHeight: getOverlayDescriptor("planner").canvas.height,
   fileSearch: "mode=planner",
-  transparent: false,
-  backgroundColor: "#060a12",
+  transparent: true,
   windowTitle: "WFHelper Relic Planner",
   windowStateKey: "planner",
   onWindowBoundsChanged: rememberOverlayWindowBounds,
@@ -151,7 +150,6 @@ export function configureOverlaySettingsPersistence(persist: () => boolean): voi
   persistOverlaySettings = persist;
 }
 
-/** Create the planner window hidden so the first relic trigger shows it instantly. */
 export function warmPlannerOverlayWindow(): void {
   if (!isRelicRecommendationOverlayEnabled(ctx.overlaySettings)) return;
   if (ctx.plannerOverlayWindow && !ctx.plannerOverlayWindow.isDestroyed()) return;
@@ -223,12 +221,23 @@ export function register(
   pushOverlayInteractionMode: () => void,
   pushOverlayThemeVars: () => void,
 ): void {
+  onAuthorized(
+    RELIC_REWARD_CONTENT_HEIGHT,
+    assertOverlayRendererSender,
+    (event, height: unknown) => {
+      const reward = ctx.overlayWindow;
+      if (!reward || reward.isDestroyed() || event.sender.id !== reward.webContents.id) return;
+      if (typeof height !== "number" || !Number.isFinite(height) || height <= 0 || height > 10_000)
+        return;
+      rewardWindowsController.fitOverlayContentHeight(height);
+    },
+  );
+
   onAuthorized(OVERLAY_CLOSE, assertOverlayRendererSender, (event) => {
     rewardWindowsController.clearOverlayAutoHideTimer();
     plannerWindowsController.clearOverlayAutoHideTimer();
     relicSelectionController.suppressReopenForClose?.();
 
-    // Reset interactive mode so the next trigger opens the overlay in passive mode.
     ctx.overlayInteractiveMode = false;
     pushOverlayInteractionMode();
 
@@ -245,7 +254,6 @@ export function register(
     rewardWindowsController.hideOverlayWindow();
   });
 
-  // move-hint state: unlock hotkey + whether a live overlay was ever dragged (setup doesn't count)
   handleAuthorized(OVERLAY_GET_DRAG_HINT, assertOverlayRendererSender, async () => ({
     hotkey: ctx.overlaySettings.interactionHotkeyEnabled
       ? String(ctx.overlaySettings.interactionHotkey || "")
@@ -257,8 +265,6 @@ export function register(
     OVERLAY_GET_PRICE,
     assertOverlayRendererSender,
     async (_event, slug: unknown) => {
-      // Session-fresh live price first, then the on-disk snapshot (instant,
-      // near-complete coverage), live WFM only for slugs both of them miss.
       if (typeof slug === "string") {
         const cached = wfmStatsPrice.getCachedPriceBySlug(slug);
         if (cached != null) return cached;

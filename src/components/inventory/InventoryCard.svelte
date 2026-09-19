@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { showMasteredBadges, showOwnedParentBadges } from "../../stores/preferences.js";
+  import {
+    showMasteredBadges,
+    showOwnedParentBadges,
+    showVaultedBadges,
+  } from "../../stores/preferences.js";
   import { itemLabel } from "../../lib/itemLabel.js";
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
 
@@ -23,7 +27,6 @@
   export let canExpand = true;
   export let selectionMode = false;
   export let selected = false;
-  /** False for rows the bulk-sell queue would reject; the box stays disabled. */
   export let selectable = true;
 
   const dispatch = createEventDispatcher<{
@@ -38,7 +41,6 @@
 
   $: shardCopies = $archonShardsBySuit.get(item.uniqueName || item.internalName || "") ?? [];
 
-  // Only a reserving verdict earns the badge; the owned count covers the rest.
   $: verdict = verdictFor(item, $inventorySafetyVerdicts);
   $: reservedVerdict = showsSafetyBadge(item, verdict) ? verdict : null;
   $: safeToSellTitle = reservedVerdict
@@ -126,8 +128,6 @@
   bind:this={cardEl}
 >
   {#if selectionMode}
-    <!-- Sits where the Details button would be, which selection mode hides. The
-         card is the labelled control, so the box is state paint, not a second one. -->
     <input
       type="checkbox"
       class="absolute top-1.5 right-1.5 z-10"
@@ -159,9 +159,9 @@
       alt={itemLabel(item)}
       auditKey={item.name}
     />
-    {#if item.vaulted || ($showMasteredBadges && marks.mastered) || ($showOwnedParentBadges && marks.crafted)}
+    {#if ($showVaultedBadges && item.vaulted) || ($showMasteredBadges && marks.mastered) || ($showOwnedParentBadges && (marks.crafted || marks.foundry))}
       <span class="item-mark-row">
-        {#if item.vaulted}<span class="vault-badge">V</span>{/if}
+        {#if $showVaultedBadges && item.vaulted}<span class="vault-badge">V</span>{/if}
         {#if $showMasteredBadges && marks.mastered}<span
             class="item-mark item-mark--mastered"
             data-item-mark="mastered"
@@ -172,10 +172,14 @@
             data-item-mark="crafted"
             title={$tr("common.parentItemOwned")}>C</span
           >{/if}
+        {#if $showOwnedParentBadges && marks.foundry}<span
+            class="item-mark item-mark--foundry"
+            data-item-mark="foundry"
+            title={$tr("common.parentReadyToClaim")}>F</span
+          >{/if}
       </span>
     {/if}
     {#if shardCopies.length > 0}
-      <!-- Absolute so a shardless card keeps exactly the same height. -->
       <span class="absolute bottom-1.5 left-1.5 flex flex-col items-start gap-0.5">
         {#each shardCopies as copy, copyIndex (copy.instanceId ?? copyIndex)}
           <ArchonShardPips

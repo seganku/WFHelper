@@ -12,10 +12,13 @@
     groupPlannedItems,
     missingOnly,
     plannerModalTarget,
+    plannerPartState,
+    unfinishedParts,
     type MasteryPlan,
     type PlannedItem,
     type PlannerSort,
   } from "../../lib/masteryPlanner.js";
+  import { masteryCraftableCount, masteryPartCounts } from "../../lib/masteryRoadmap.js";
   import { creditsRow } from "../../lib/syndicates/rankup.js";
   import { inventoryData, itemDb } from "../../stores/data.js";
   import type { ComponentInfo } from "../../types/inventory.js";
@@ -40,8 +43,6 @@
     missing: number;
   }
 
-  // Past this many chips a card reads as a bill of materials, so the rest wait
-  // behind one expander.
   const MATERIAL_CHIP_LIMIT = 4;
 
   let showCovered = $state(false);
@@ -52,7 +53,6 @@
   const visibleTotals = $derived(showCovered ? plan.totals : shortTotals);
   const credits = $derived(creditsRow(plan.totalCredits, $inventoryData));
   const creditsVisible = $derived(credits.needed > 0 && (showCovered || credits.missing > 0));
-  // Covered rows go last in name order, so revealing them never reshuffles the rest.
   const sortedRows: MaterialRow[] = $derived(
     [
       ...visibleTotals.map((row) => ({
@@ -95,7 +95,6 @@
     return row.needed > 0 ? row.missing / row.needed : 0;
   }
 
-  // Floor so a hair under full still reads 99%; only a covered row claims 100%.
   function coveredPercent(row: { owned: number; needed: number; missing: number }): number {
     if (row.missing <= 0) return 100;
     const fraction = row.needed > 0 ? Math.max(0, Math.min(1, row.owned / row.needed)) : 1;
@@ -108,8 +107,6 @@
 
   const nameIndex = $derived(buildItemNameIndex($itemDb));
 
-  // The detail modal keys off ComponentInfo, so a planner chip hands it the same
-  // shape the collection cards do: a short part name plus its parent.
   function openRow(entry: {
     uniqueName: string;
     name: string;
@@ -140,8 +137,6 @@
       <img src={row.iconUrl} alt="" class="relative h-4 w-4 shrink-0 object-contain" />
     {/if}
     <span class="relative min-w-0 flex-1 truncate text-xs text-text-primary">{row.label}</span>
-    <!-- Compact counts so nothing clips; the title carries the exact numbers. Fixed
-         widths line the numbers up bar to bar. -->
     <span
       class="material-bar__value relative w-[6.25rem] shrink-0 text-right text-xs tabular-nums text-text-primary"
       >{formatNumber(row.owned, $locale)} / {formatNumber(row.needed, $locale)}</span
@@ -154,8 +149,9 @@
 {/snippet}
 
 {#snippet plannedCard(item: PlannedItem)}
-  {@const missingParts = missingOnly(item.components)}
-  {@const ownedParts = item.components.length - missingParts.length}
+  {@const listedParts = unfinishedParts(item.components)}
+  {@const parts = masteryPartCounts(item.components.map(plannerPartState))}
+  {@const craftable = masteryCraftableCount(item.components, plannerPartState, $itemDb || {})}
   {@const missingMaterials = missingOnly(item.resources)}
   {@const materialsOpen = expandedMaterials[item.uniqueName] === true}
   {@const shownMaterials = materialsOpen
@@ -165,7 +161,7 @@
     class="grid min-w-0 content-start gap-2 rounded-[var(--radius-lg)] border border-[var(--ui-panel-border)] bg-[var(--ui-panel-bg)] p-2.5"
     data-planner-row={item.uniqueName}
   >
-    <div class="grid min-w-0 grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
+    <div class="grid min-w-0 grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3">
       <span
         class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-[var(--radius-md)] bg-surface-card"
       >
@@ -253,26 +249,40 @@
         ></rect>
       </svg>
 
-      {#if missingParts.length > 0}
+      {#if listedParts.length > 0}
         <div class="grid min-w-0 gap-1">
           <span
             class="font-display text-[0.68rem] font-semibold uppercase tracking-[0.06em] text-text-muted"
             >{$tr("mastery.planner.parts")}</span
           >
           <div class="flex min-w-0 flex-wrap gap-1.5">
-            {#each missingParts as comp (comp.uniqueName)}
-              <ItemTile
-                tileKey={comp.uniqueName}
-                tone="danger"
-                imageUrl={comp.imageUrl}
-                auditKey={comp.name}
-                label={itemLabel(comp)}
-                count="{formatNumber(comp.owned, $locale)}/{formatNumber(comp.needed, $locale)}"
-                ariaLabel={$tr("mastery.openComponentDetailsAria", {
-                  name: itemLabel(comp) || $tr("mastery.componentFallback"),
-                })}
-                onOpen={() => openRow(comp)}
-              />
+            {#each listedParts as comp (comp.uniqueName)}
+              {@const blueprintHeld = comp.state === "blueprint"}
+              <span class="relative" data-part-state={comp.state}>
+                <ItemTile
+                  tileKey={comp.uniqueName}
+                  tone={comp.missing > 0 ? "danger" : "neutral"}
+                  imageUrl={comp.imageUrl}
+                  auditKey={comp.name}
+                  label={itemLabel(comp)}
+                  count="{formatNumber(
+                    blueprintHeld ? comp.built : comp.owned,
+                    $locale,
+                  )}/{formatNumber(comp.needed, $locale)}"
+                  ariaLabel={$tr("mastery.openComponentDetailsAria", {
+                    name: itemLabel(comp) || $tr("mastery.componentFallback"),
+                  })}
+                  onOpen={() => openRow(comp)}
+                />
+                {#if blueprintHeld}
+                  <span
+                    class="absolute top-1 right-1 h-2.5 w-2.5 rounded-full border border-warning-dim bg-warning"
+                    role="img"
+                    title={$tr("common.blueprintOwnedNotBuilt")}
+                    aria-label={$tr("common.blueprintOwnedNotBuilt")}
+                  ></span>
+                {/if}
+              </span>
             {/each}
           </div>
         </div>
@@ -321,12 +331,16 @@
 
       <span class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
         {#if item.components.length > 0}
-          <span
-            >{$tr("mastery.roadmap.partsOwnedShort", {
-              owned: ownedParts,
-              total: item.components.length,
-            })}</span
-          >
+          <span>
+            {#if craftable > 0}{$tr("mastery.roadmap.partsOwnedCraftableShort", {
+                owned: parts.built,
+                craftable,
+                total: parts.total,
+              })}{:else}{$tr("mastery.roadmap.partsOwnedShort", {
+                owned: parts.built,
+                total: parts.total,
+              })}{/if}
+          </span>
         {/if}
         {#if item.credits > 0}
           <span>{$tr("common.credits")}: {item.credits.toLocaleString($locale)}</span>
@@ -421,8 +435,6 @@
       {#if sortedRows.length === 0}
         <p class="text-xs text-text-muted">{$tr("mastery.planner.noMaterialsNeeded")}</p>
       {:else}
-        <!-- min() so a container narrower than one bar shrinks the track instead
-             of overflowing. -->
         <div class="grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(100%,270px),1fr))]">
           {#each sortedRows as row (row.key)}
             {@render materialBar(row)}
@@ -462,8 +474,6 @@
 {/if}
 
 <style>
-  /* Tinted rather than solid: the name sits on top of this fill and has to stay
-     legible where the bar ends and where it covers the whole row. */
   .material-bar__fill {
     position: absolute;
     inset: 0 auto 0 0;
@@ -472,13 +482,8 @@
   .material-bar__fill.covered {
     background: color-mix(in oklab, var(--success) 26%, transparent);
   }
-  /* Darkens fill and empty track alike, so one pill style works at any percent. */
   .material-bar__value {
     border-radius: var(--radius-sm);
-    /* Rajdhani fills the text-xs line box to the pixel, so the percent sat flush
-       against its pill's top edge while the Barlow count sat a pixel inside its
-       own. Page zoom is fractional on a 1440p or 4K display and the rounding has
-       to land somewhere, so the box owns slack instead of inheriting none. */
     padding: 0.125rem 0.25rem;
     line-height: 1.25;
     background: color-mix(in oklab, var(--bg-deep) 55%, transparent);

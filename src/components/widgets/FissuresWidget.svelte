@@ -1,7 +1,12 @@
 <script lang="ts">
   import { tr, type MessageKey } from "../../lib/i18n.js";
   import { buildFissureRows } from "../../lib/world/useWorldView.js";
-  import { dashboardLayout, settingNumber, widgetSettings } from "../../stores/dashboard.js";
+  import {
+    dashboardLayout,
+    settingBoolean,
+    settingNumber,
+    widgetSettings,
+  } from "../../stores/dashboard.js";
   import { worldData, worldFissureMode, worldLoading } from "../../stores/world.js";
   import WidgetFrame from "./WidgetFrame.svelte";
 
@@ -22,8 +27,8 @@
   const wd = $derived($worldData);
   const settings = $derived(widgetSettings($dashboardLayout, "widget.fissures"));
   const limit = $derived(settingNumber(settings, "limit", 5));
-  // The World tab's own mode filter, so the two lists agree on what counts.
-  const rows = $derived(buildFissureRows(wd?.fissures, $worldFissureMode, nowMs, nowCoarseMs));
+  const modeRows = $derived(buildFissureRows(wd?.fissures, $worldFissureMode, nowMs, nowCoarseMs));
+  const rows = $derived(modeRows.filter((row) => settingBoolean(settings, row.tierCls, true)));
   const shown = $derived(rows.slice(0, limit));
   const modeKey = $derived(MODE_LABEL_KEYS[$worldFissureMode] ?? "common.all");
 </script>
@@ -42,14 +47,15 @@
   {/snippet}
   <ul class="m-0 max-h-[340px] flex-1 list-none overflow-y-auto p-0">
     {#each shown as fissure (`${fissure.node}|${fissure.tier}|${fissure.expiry}`)}
-      <li class="flex items-baseline gap-2 py-1 text-sm">
+      <li class="flex items-baseline gap-2 py-1 text-sm" data-fissure-tier={fissure.tierCls}>
         <span
           class="w-12 shrink-0 rounded-[var(--radius-sm)] text-center text-xs font-bold"
           class:world-badge-lith={fissure.tierCls === "lith"}
           class:world-badge-meso={fissure.tierCls === "meso"}
           class:world-badge-neo={fissure.tierCls === "neo"}
           class:world-badge-axi={fissure.tierCls === "axi"}
-          class:world-badge-requiem={fissure.tierCls === "requiem"}>{fissure.tier}</span
+          class:world-badge-requiem={fissure.tierCls === "requiem"}
+          class:world-badge-omnia={fissure.tierCls === "omnia"}>{fissure.tier}</span
         >
         <span class="min-w-0 flex-1 truncate text-text-secondary">
           {fissure.missionType} &middot; {fissure.node}

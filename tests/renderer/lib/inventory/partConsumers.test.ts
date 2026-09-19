@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { componentUniqueNameAliases } from "../../../../config/shared/componentNames.js";
 import {
   componentParentOf,
   consumersOf,
   isCraftingResource,
   isReservablePart,
   partConsumerIndex,
+  partDemandAliases,
   partsConsumedBy,
 } from "../../../../src/lib/inventory/partConsumers.js";
 import type { ItemDbEntry } from "../../../../src/types/inventory.js";
@@ -117,6 +119,46 @@ describe("isCraftingResource / isReservablePart", () => {
     expect(isReservablePart(CELL, undefined)).toBe(false);
     expect(isReservablePart(PLASM, undefined)).toBe(false);
     expect(isReservablePart("/Lotus/Types/Items/Gems/Solaris/x", undefined)).toBe(false);
+  });
+});
+
+describe("partDemandAliases", () => {
+  const AMBASSADOR = "/Lotus/Weapons/Corpus/LongGuns/CrpArSniper/CrpArSniperRifle";
+  const RECEIVER = "/Lotus/Types/Recipes/Weapons/WeaponParts/CrpArSniperReceiver";
+  const RECEIVER_BP = "/Lotus/Types/Recipes/Weapons/WeaponParts/AmbassadorReceiverBlueprint";
+  const SAGEK = "/Lotus/Weapons/Grineer/Pistols/GrnOrokinPistol/GrnOrokinPistol";
+  const SAGEK_BP = "/Lotus/Types/Recipes/Weapons/SagekPrimeBlueprint";
+
+  const renamed: Record<string, ItemDbEntry> = {
+    [AMBASSADOR]: entry([{ uniqueName: RECEIVER }], undefined, { masterable: true }),
+    [RECEIVER]: { name: "Ambassador Receiver", isBuildComponent: true, componentOf: AMBASSADOR },
+    [RECEIVER_BP]: {
+      name: "Ambassador Receiver Blueprint",
+      isBuildComponent: true,
+      componentOf: AMBASSADOR,
+      buildsProduct: RECEIVER,
+    },
+    [SAGEK]: { name: "Sagek Prime", masterable: true },
+    [SAGEK_BP]: {
+      name: "Sagek Prime Blueprint",
+      isBuildComponent: true,
+      componentOf: SAGEK,
+      buildsProduct: SAGEK,
+    },
+  };
+
+  it("reaches the part a renamed blueprint builds", () => {
+    const aliases = partDemandAliases(RECEIVER_BP, renamed);
+    expect(aliases).toContain(RECEIVER_BP);
+    expect(aliases).toContain(RECEIVER);
+  });
+
+  it("keeps whole gear out of its own blueprint's aliases", () => {
+    expect(partDemandAliases(SAGEK_BP, renamed)).not.toContain(SAGEK);
+  });
+
+  it("falls back to the stem aliases for a name the database does not carry", () => {
+    expect(partDemandAliases(LINK, renamed)).toEqual(componentUniqueNameAliases(LINK));
   });
 });
 

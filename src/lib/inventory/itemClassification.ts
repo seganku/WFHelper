@@ -22,7 +22,6 @@ interface CategoryDef {
   label: string;
 }
 
-/** Filter chip and label per equipment collection; the shared list owns the keys. */
 const CATEGORY_BY_COLLECTION: Record<EquipmentCollection, Omit<CategoryDef, "key">> = {
   Suits: { cat: "warframes", label: "Warframe" },
   LongGuns: { cat: "primary", label: "Primary" },
@@ -84,7 +83,13 @@ export function resolveItem(
   }
   if (!internalName) return { name: "Unknown", imageUrl: null };
 
-  return { name: fallbackNameFromUniqueName(internalName), imageUrl: null, category: "Unknown" };
+  return {
+    ...dbEntry,
+    name: fallbackNameFromUniqueName(internalName),
+    nameIsFallback: true,
+    imageUrl: dbEntry?.imageUrl ?? null,
+    category: dbEntry?.category ?? "Unknown",
+  };
 }
 
 export function isArcaneUpgrade(
@@ -289,8 +294,6 @@ export function isBuildPartItem(
     return false;
   }
 
-  // If a data source explicitly marks this as non-tradable, never include it
-  // as a build part regardless of name heuristics.
   if (dbEntry.tradable === false) return false;
 
   const pathLooksLikePart = hasBuildPartPath(internalName);
@@ -316,8 +319,7 @@ export function canonicalBuildPartName(internalName: string, name: string): stri
   let result = name;
   // DE keeps the crafted part under ...Component beside the tradable ...Blueprint
   // recipe, but the item DB names the Component entry after the blueprint players
-  // trade (WFCD keys the blueprint under the Component path). The raw Component
-  // row is the crafted part, so keeping the suffix would mislabel it.
+  // trade (WFCD keys the blueprint under the Component path).
   if (/\/Types\/Recipes\/\S*Component$/i.test(internalName)) {
     result = result.replace(/\s+Blueprint$/i, "");
   }
@@ -335,8 +337,7 @@ export function isMarketListedMissionKey(internalName: string, marketListed: boo
 
 /** A mod or arcane the catalog lists under its own game reference is tradable.
  *  The bundled item data has no entry at all for a freshly added one and calls
- *  158 listed mods untradable outright, so the listing is the better authority.
- *  Sets are never a ranked group, so an assembled Warframe stays out. */
+ *  158 listed mods untradable outright, so the listing is the better authority. */
 export function isCatalogListedRankedItem(
   group: string | null | undefined,
   marketListed: boolean,
@@ -386,9 +387,7 @@ const WEAPON_SLOT_FILTERS = new Set(["primary", "secondary", "melee"]);
 export const MODULAR_PART_PATH =
   /\/(?:kdrives|zaws|kitguns|hoverboard|moapets|operatoramplifiers?)\/|\/(?:infkitgun|modularmelee|sumodular)[a-z0-9]*\//i;
 
-// Pet and sentinel parts hit the same "Pistols" export trap. Kept apart from the
-// modular family because classifyForFoundry answers Companion here and Modular
-// there; inferCategory only cares that either one matched.
+// Pet and sentinel parts hit the same "Pistols" export trap.
 export const PET_PART_PATH =
   /\/(?:pets|zanukapets|creaturepets|catbrowpets|kubrowpets|sentinels)\//i;
 
@@ -413,22 +412,17 @@ export function inferCategory(
 }
 
 interface ModularBuild {
-  /** English display name, taken from the part that defines the build. */
   name: string;
-  /** Active game language, absent when the naming part has no localized name. */
   displayName?: string;
   category: string;
   categoryLabel: string;
-  /** The defining part's icon; a build of its own has none to show. */
   imageUrl: string | null;
-  /** Every fitted part, resolved for display. */
   partNames: string[];
 }
 
 interface ModularKind {
   cat: string;
   label: string;
-  /** Part the build is named after: chamber, strike, prism, deck, model head. */
   definingPart: RegExp | null;
 }
 
@@ -437,7 +431,6 @@ const MODULAR_KINDS: Record<string, ModularKind> = {
   Pistols: { cat: "secondary", label: "Kitgun", definingPart: /\/Barrels?\//i },
   Melee: { cat: "melee", label: "Zaw", definingPart: /\/Tips?\//i },
   OperatorAmps: { cat: "amps", label: "Amp", definingPart: /\/Barrel\//i },
-  // K-Drives have no filter chip of their own; Misc is where their parts sit.
   Hoverboards: { cat: "misc", label: "K-Drive", definingPart: /Deck$/i },
   MoaPets: { cat: "companions", label: "Moa", definingPart: /MoaPetHead/i },
   KubrowPets: { cat: "companions", label: "Companion", definingPart: null },
@@ -453,7 +446,6 @@ const HOUND_KIND: ModularKind = {
 /** Hatched Kubrows, Kavats and Deimos pets all live here. */
 export const PET_COLLECTION_KEY = "KubrowPets";
 
-/** parseInventory walks these separately and takes only the builds they hold. */
 export const MODULAR_COLLECTION_KEYS: readonly string[] = MODULAR_COLLECTIONS;
 
 // Everything in these two is a build; elsewhere ModularParts is what tells a

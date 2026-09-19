@@ -26,6 +26,9 @@ const ALLOWLIST = new Set([
   "priceQueueFullError",
   // Test seam bag, parallel to wfmClient's `__test__`.
   "__schedulerTest__",
+  // Production implementations exported for the RivenParser.js parity cases.
+  "unparseBuff",
+  "unparseCurse",
 ]);
 
 // Where exports are *defined* (main production tree).

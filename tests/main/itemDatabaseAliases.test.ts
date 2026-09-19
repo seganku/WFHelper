@@ -1,7 +1,26 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as itemDb from "../../services/itemDatabase";
+import * as publicExportSource from "../../services/publicExportSource";
 import { deriveGroup } from "../../src/lib/inventory/itemClassification";
+import { partDemandAliases } from "../../src/lib/inventory/partConsumers";
+import type { ItemDbEntry } from "../../src/types/inventory";
+
+function aliasDb(keys: readonly string[]): Record<string, ItemDbEntry> {
+  const lookup = itemDb.getRendererLookup();
+  const db: Record<string, ItemDbEntry> = {};
+  for (const key of keys) {
+    const entry = lookup[key];
+    if (!entry) continue;
+    db[key] = {
+      name: entry.name,
+      isBuildComponent: entry.isBuildComponent,
+      ...(entry.componentOf ? { componentOf: entry.componentOf } : {}),
+      ...(entry.buildsProduct ? { buildsProduct: entry.buildsProduct } : {}),
+    };
+  }
+  return db;
+}
 
 describe("itemDatabase WFCD alias enrichment", () => {
   beforeAll(() => {
@@ -18,6 +37,8 @@ describe("itemDatabase WFCD alias enrichment", () => {
 
     expect(aeolakBarrel?.name).toBe("Aeolak Barrel Blueprint");
     expect(ghoulsawBlade?.name).toBe("Ghoulsaw Blade Blueprint");
+    expect(aeolakBarrel?.nameIsFallback).toBeUndefined();
+    expect(ghoulsawBlade?.nameIsFallback).toBeUndefined();
   });
 
   it("keeps known tradable recipe entries tradable", () => {
@@ -60,6 +81,18 @@ describe("itemDatabase WFCD alias enrichment", () => {
     expect(lookup[rendererBp?.buildsProduct || ""]?.recipe).toBeTruthy();
   });
 
+  it("gives a renamed part blueprint the alias every recipe names it by", () => {
+    const receiverBp = "/Lotus/Types/Recipes/Weapons/WeaponParts/AmbassadorReceiverBlueprint";
+    const receiver = "/Lotus/Types/Recipes/Weapons/WeaponParts/CrpArSniperReceiver";
+    const weaponBp = "/Lotus/Types/Recipes/Weapons/SagekPrimeBlueprint";
+    const weapon = "/Lotus/Weapons/Grineer/Pistols/GrnOrokinPistol/GrnOrokinPistol";
+    const db = aliasDb([receiverBp, receiver, weaponBp, weapon]);
+
+    expect(Object.keys(db)).toHaveLength(4);
+    expect(partDemandAliases(receiverBp, db)).toContain(receiver);
+    expect(partDemandAliases(weaponBp, db)).not.toContain(weapon);
+  });
+
   it("preserves unresolved weapon-part tradability as unknown for renderer heuristics", () => {
     const corufellHandle = itemDb.lookupItem(
       "/Lotus/Types/Recipes/Weapons/WeaponParts/GunScytheHandle",
@@ -79,6 +112,8 @@ describe("itemDatabase WFCD alias enrichment", () => {
 
     expect(largeEnergy?.name).toBe("Squad Energy Restore (Large) Blueprint");
     expect(mediumEnergy?.name).toBe("Squad Energy Restore (Medium) Blueprint");
+    expect(largeEnergy?.nameIsFallback).toBeUndefined();
+    expect(mediumEnergy?.nameIsFallback).toBeUndefined();
   });
 
   it("names a part blueprint once when its component already reads Blueprint", () => {
@@ -274,5 +309,35 @@ describe("itemDatabase sentinel weapon vaulting", () => {
     );
     expect(shade?.vaulted).toBe(true);
     expect(burstLaser?.vaulted).toBe(true);
+  });
+});
+
+describe("itemDatabase fallback name provenance", () => {
+  it("carries missing-source provenance to the renderer without guessing from the name", () => {
+    const unresolved = "/Lotus/Weapons/Test/UnresolvedExportName";
+    const literal = "/Lotus/Weapons/Test/LiteralExportName";
+    const overlay = vi.spyOn(publicExportSource, "getOverlay").mockReturnValue({
+      exports: {
+        ExportWeapons: {
+          [unresolved]: { name: "/Lotus/Language/Test/NotInDictionary" },
+          [literal]: { name: "Literal Export Name" },
+        },
+      },
+      images: null,
+    });
+    try {
+      itemDb.buildDatabase();
+      expect(itemDb.lookupItem(unresolved)).toMatchObject({
+        name: "Unresolved Export Name",
+        nameIsFallback: true,
+      });
+      const renderer = itemDb.getRendererLookup();
+      expect(renderer[unresolved].nameIsFallback).toBe(true);
+      expect(renderer[literal].name).toBe("Literal Export Name");
+      expect(renderer[literal].nameIsFallback).toBeUndefined();
+    } finally {
+      overlay.mockRestore();
+      itemDb.buildDatabase();
+    }
   });
 });

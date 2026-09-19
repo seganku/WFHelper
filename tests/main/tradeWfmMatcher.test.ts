@@ -20,6 +20,7 @@ vi.mock("../../services/wfmOrders", () => ({
 
 vi.mock("../../services/wfmCatalog", () => ({
   lookupByName: vi.fn(),
+  lookupItemDetails: vi.fn(),
   resolveSetMembership: vi.fn(),
 }));
 
@@ -38,6 +39,7 @@ const mockGetToken = vi.mocked(wfmSession.getToken);
 const mockGetMyOrders = vi.mocked(wfmOrders.getMyOrders);
 const mockCloseOrder = vi.mocked(wfmOrders.closeOrder);
 const mockLookupByName = vi.mocked(wfmCatalog.lookupByName);
+const mockLookupItemDetails = vi.mocked(wfmCatalog.lookupItemDetails);
 const mockResolveSetMembership = vi.mocked(wfmCatalog.resolveSetMembership);
 const mockGetMyContracts = vi.mocked(wfmContracts.getMyContracts);
 const mockCloseContract = vi.mocked(wfmContracts.closeContract);
@@ -80,7 +82,7 @@ async function matchOne(
   return first ?? null;
 }
 
-function catalogItem(url_name: string): ReturnType<typeof wfmCatalog.lookupByName> {
+function catalogItem(url_name: string): NonNullable<ReturnType<typeof wfmCatalog.lookupByName>> {
   return {
     id: null,
     url_name,
@@ -89,7 +91,7 @@ function catalogItem(url_name: string): ReturnType<typeof wfmCatalog.lookupByNam
     icon: null,
     maxRank: null,
     gameRef: null,
-  } as ReturnType<typeof wfmCatalog.lookupByName>;
+  };
 }
 
 function resolvedSet(parts: Array<{ slug: string; quantityInSet: number }>) {
@@ -103,6 +105,7 @@ describe("tradeWfmMatcher", () => {
     vi.resetAllMocks();
     mockGetToken.mockReturnValue("test-jwt");
     mockLookupByName.mockReturnValue(null);
+    mockLookupItemDetails.mockResolvedValue(null);
     mockResolveSetMembership.mockResolvedValue({ kind: "not-set" });
     mockGetMyContracts.mockResolvedValue({
       contracts: [],
@@ -1084,6 +1087,88 @@ describe("tradeWfmMatcher", () => {
   });
 
   describe("ranked items", () => {
+    const liveWireOrder = {
+      id: "live-wire-order",
+      orderType: "sell",
+      platinum: 7,
+      quantity: 1,
+      visible: true,
+      modRank: null,
+      subtype: null,
+      itemId: "live-wire-item",
+      itemName: "Live Wire",
+      itemUrlName: "live_wire",
+      itemThumb: null,
+    };
+    const liveWireTrade = {
+      partner: "Buyer",
+      platChange: 7,
+      type: "sale" as const,
+      items: [{ displayName: "Live Wire (COMMON RANK 0)", count: 1, direction: "given" as const }],
+    };
+
+    it("matches a rank-zero dialog to a confirmed rankless listing", async () => {
+      mockGetMyOrders.mockResolvedValue({ sell: [liveWireOrder], buy: [] });
+      mockLookupItemDetails.mockResolvedValue({
+        ...catalogItem("live_wire"),
+        id: liveWireOrder.itemId,
+        hasRanks: false,
+      });
+
+      const result = await matchOne(liveWireTrade);
+
+      expect(result?.orderId).toBe(liveWireOrder.id);
+      expect(mockLookupItemDetails).toHaveBeenCalledExactlyOnceWith("live_wire");
+      expect(mockCloseOrder).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "ranked metadata", id: "live-wire-item", slug: "live_wire", hasRanks: true },
+      { label: "unknown metadata", id: "live-wire-item", slug: "live_wire" },
+      { label: "another item ID", id: "other-item", slug: "live_wire", hasRanks: false },
+      { label: "another slug", id: "live-wire-item", slug: "other_item", hasRanks: false },
+    ])("rejects a missing order rank with $label", async ({ id, slug, ...metadata }) => {
+      mockGetMyOrders.mockResolvedValue({ sell: [liveWireOrder], buy: [] });
+      mockLookupItemDetails.mockResolvedValue({ ...catalogItem(slug), id, ...metadata });
+
+      expect(await matchOne(liveWireTrade)).toBeNull();
+    });
+
+    it("does not accept a missing rank when detail lookup fails", async () => {
+      mockGetMyOrders.mockResolvedValue({ sell: [liveWireOrder], buy: [] });
+      mockLookupItemDetails.mockRejectedValue(new Error("offline"));
+
+      expect(await matchOne(liveWireTrade)).toBeNull();
+      expect(mockCloseOrder).not.toHaveBeenCalled();
+    });
+
+    it("does not infer rankless status from a catalog with a missing max rank", async () => {
+      mockGetMyOrders.mockResolvedValue({ sell: [liveWireOrder], buy: [] });
+      mockLookupByName.mockReturnValue({ ...catalogItem("live_wire"), id: liveWireOrder.itemId });
+
+      expect(await matchOne(liveWireTrade)).toBeNull();
+      expect(mockLookupItemDetails).toHaveBeenCalledExactlyOnceWith("live_wire");
+    });
+
+    it("does not request details when the listing already has rank zero", async () => {
+      mockGetMyOrders.mockResolvedValue({ sell: [{ ...liveWireOrder, modRank: 0 }], buy: [] });
+
+      expect((await matchOne(liveWireTrade))?.orderId).toBe(liveWireOrder.id);
+      expect(mockLookupItemDetails).not.toHaveBeenCalled();
+    });
+
+    it("never substitutes a missing listing rank for a positive traded rank", async () => {
+      mockGetMyOrders.mockResolvedValue({ sell: [liveWireOrder], buy: [] });
+
+      expect(
+        await matchOne({
+          ...liveWireTrade,
+          items: [{ displayName: "Live Wire (COMMON RANK 1)", count: 1, direction: "given" }],
+        }),
+      ).toBeNull();
+      expect(mockLookupItemDetails).not.toHaveBeenCalled();
+    });
+
     it("matches a mod listed without the trade dialog's rank suffix", async () => {
       mockGetMyOrders.mockResolvedValue({
         sell: [

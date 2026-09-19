@@ -1,18 +1,14 @@
 @layer components {
-  /* app layout */
   #app {
     display: flex;
     height: calc(100vh - var(--titlebar-height) - var(--statusbar-height));
   }
   #content {
     flex: 1;
-    /* Wide content owns horizontal overflow so the page stays fixed. */
     min-width: 0;
     overflow-y: auto;
     overflow-x: hidden;
     background: var(--bg-base);
-    /* A top padding here parks the sticky rows below the scrollport and lets
-       the grid scroll through the strip above them. */
     padding: 0 var(--content-gutter) 1.5rem;
   }
   #app:has(#content.setup-active) {
@@ -21,8 +17,7 @@
   #content.setup-active {
     display: flex;
   }
-  /* Auto margins centre the wizard when it fits; unlike align/justify-center
-     an overflowing wizard stays scrollable instead of clipping at the top. */
+  /* Auto margins centre the wizard when it fits; unlike align/justify-center an overflowing wizard stays scrollable. */
   #content.setup-active > .view {
     width: 100%;
     margin: auto;
@@ -46,7 +41,6 @@
     overflow: hidden;
   }
 
-  /* view header */
   .view-header {
     margin-bottom: 1rem;
     display: flex;
@@ -70,7 +64,6 @@
     gap: 0.625rem;
   }
 
-  /* shared filter bar */
   .shared-filter-bar {
     margin-bottom: 0.9rem;
     display: flex;
@@ -203,7 +196,6 @@
   .shared-chip-group .filter-tabs {
     flex-wrap: nowrap;
   }
-  /* Doubled class outranks the nowrap rule above without relying on order. */
   .shared-chip-group.shared-chip-group--wrap {
     display: flex;
   }
@@ -235,13 +227,7 @@
   }
   .shared-filter-bar-inline {
     margin-bottom: 0;
-    flex: 1;
-    min-width: 0;
-  }
-  .shared-filter-bar-inline .shared-filter-controls {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    min-width: 0;
+    flex: 1 1 auto;
   }
   .shared-filter-bar-inline .shared-filter-search {
     min-width: 11rem;
@@ -252,12 +238,10 @@
   .shared-filter-bar-inline .shared-filter-select {
     min-width: 8rem;
   }
-  /* The inline bar never wraps, so its filter selects stay tighter than sort. */
   .shared-filter-bar-inline .shared-select-group .shared-filter-select {
     min-width: 6.5rem;
   }
 
-  /* search box */
   .search-box {
     position: relative;
     min-width: 12rem;
@@ -317,7 +301,6 @@
     color: var(--text-primary);
   }
 
-  /* filter tabs (pill style, used by shared filter bars) */
   .filter-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -350,7 +333,6 @@
     color: var(--accent);
   }
 
-  /* buttons */
   .btn-primary,
   .btn-secondary,
   .btn-danger,
@@ -417,9 +399,7 @@
     font-size: 0.75rem;
   }
 
-  /* Every checkbox, not an opt-in class: accent-color alone only paints the
-     CHECKED box, leaving the unchecked one the browser default white. Switch
-     inputs hide themselves with utilities, which win over this layer. */
+  /* accent-color alone only paints the CHECKED box, leaving the unchecked one the browser default white. */
   input[type="checkbox"] {
     appearance: none;
     -webkit-appearance: none;
@@ -466,9 +446,8 @@
     opacity: 0.45;
   }
 
-  /* empty state */
   .empty-state {
-    min-height: 15rem;
+    min-height: min(15rem, 40vh);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -497,7 +476,6 @@
     color: var(--accent-bright);
   }
 
-  /* cross-component card grids */
   .item-grid,
   #relic-grid {
     display: grid;
@@ -505,7 +483,6 @@
     gap: 0.75rem;
   }
 
-  /* cross-component card surface */
   .item-card,
   .resource-card,
   .order-row {
@@ -516,8 +493,6 @@
     transition:
       border-color 0.12s,
       background-color 0.12s;
-    /* Paint containment isolates each card so hover repaints stay local
-       instead of invalidating the grid when many cards are visible. */
     contain: layout paint style;
   }
   .item-card {
@@ -531,7 +506,6 @@
     background: var(--bg-raised);
   }
 
-  /* cross-component card body / name / type */
   .item-body,
   .resource-info {
     display: flex;
@@ -557,7 +531,6 @@
     color: var(--text-secondary);
   }
 
-  /* cross-component image wrapper base */
   .resource-img-wrap {
     display: flex;
     align-items: center;
@@ -583,7 +556,6 @@
     object-fit: contain;
   }
 
-  /* cross-component rank bar */
   .item-rank-bar {
     margin-top: 0.2rem;
     height: 0.28rem;
@@ -608,7 +580,6 @@
     color: var(--text-muted);
   }
 
-  /* Bleed pinned filters across the content gutters. */
   .view-sticky-filters {
     position: sticky;
     top: 0;
@@ -646,7 +617,6 @@
     cursor: pointer;
     color: inherit;
   }
-  /* lh so the caret tracks the section title line-height. */
   .world-toggle-icon {
     width: 0.75lh;
     height: 0.75lh;
@@ -665,7 +635,31 @@
     transform: rotate(-90deg);
   }
 
-  /* cross-component badges */
+  .world-badge-lith {
+    background: color-mix(in srgb, var(--world-badge-lith-text) 12%, transparent);
+    color: var(--world-badge-lith-text);
+  }
+  .world-badge-meso {
+    background: color-mix(in srgb, var(--world-badge-meso-text) 18%, transparent);
+    color: var(--world-badge-meso-text);
+  }
+  .world-badge-neo {
+    background: color-mix(in srgb, var(--world-badge-neo-text) 12%, transparent);
+    color: var(--world-badge-neo-text);
+  }
+  .world-badge-axi {
+    background: color-mix(in srgb, var(--world-badge-axi-text) 12%, transparent);
+    color: var(--world-badge-axi-text);
+  }
+  .world-badge-requiem {
+    background: color-mix(in srgb, var(--world-badge-requiem-text) 14%, transparent);
+    color: var(--world-badge-requiem-text);
+  }
+  .world-badge-omnia {
+    background: color-mix(in srgb, var(--world-badge-omnia-text) 12%, transparent);
+    color: var(--world-badge-omnia-text);
+  }
+
   .vault-badge,
   .item-mark {
     position: absolute;
@@ -683,7 +677,6 @@
     color: var(--danger);
     border: 1px solid var(--danger-dim);
   }
-  /* Same badge at row scale: a list row has no positioned art to pin it to. */
   .vault-badge--inline {
     position: static;
     display: inline-block;
@@ -696,7 +689,6 @@
     color: var(--info);
     border-color: var(--info-dim);
   }
-  /* Align badges at the artwork's top-left corner. */
   .item-mark-row {
     position: absolute;
     top: 0.4rem;
@@ -718,6 +710,11 @@
     color: var(--info);
     border: 1px solid var(--info-dim);
   }
+  .item-mark--foundry {
+    background: var(--warning-bg);
+    color: var(--warning);
+    border: 1px solid var(--warning-dim);
+  }
 
   .listing-warning {
     width: fit-content;
@@ -731,7 +728,6 @@
     line-height: 1.3;
   }
 
-  /* cross-component pills / icons / tier colours */
   .order-vis {
     display: inline-flex;
     align-items: center;
@@ -779,8 +775,6 @@
     color: var(--relic-requiem);
   }
 
-  /* cross-component toggle button groups */
-  /* tab bar (underline style, used by rivens / settings) */
   .tab-bar {
     display: flex;
     gap: 0;
@@ -812,7 +806,6 @@
     border-bottom-color: var(--text-heading);
   }
 
-  /* detail / modal framework */
   .detail-overlay {
     position: fixed;
     inset: 0;
@@ -1003,7 +996,8 @@
     background: var(--info-bg);
     color: var(--info);
   }
-  .detail-tag.progress {
+  .detail-tag.progress,
+  .detail-tag.foundry {
     background: var(--warning-bg);
     color: var(--warning);
   }

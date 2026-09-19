@@ -1,6 +1,6 @@
 import { withScope } from "./logger";
 import { normalizeErrorMessage } from "../config/shared/errors";
-import { SUBTYPE_REQUIRED_CODE } from "../config/shared/wfmOrders";
+import { SUBTYPE_REQUIRED_CODE, normalizePerTrade } from "../config/shared/wfmOrders";
 
 import { requestV2 } from "./wfmClient";
 import { getInGameName } from "./wfmSession";
@@ -37,9 +37,7 @@ function normalise(raw: WfmRawOrder, forcedType?: string): NormalisedOrder {
   const imageUrl = formatWfmAssetUrl(thumb);
 
   const quantity = Number.isInteger(raw.quantity) && raw.quantity > 0 ? raw.quantity : 1;
-  const perTradeRaw = raw.perTrade ?? raw.per_trade ?? 1;
-  const perTrade =
-    Number.isInteger(perTradeRaw) && perTradeRaw > 0 ? Math.min(perTradeRaw, quantity) : 1;
+  const perTrade = normalizePerTrade(raw.perTrade ?? raw.per_trade, quantity);
 
   return {
     id: raw.id,

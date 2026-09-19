@@ -18,6 +18,8 @@ let _token: string | null = null;
 let _onEvent: ((type: string, payload: unknown) => void) | null = null;
 let _onAuthGiveUp: (() => void) | null = null;
 let _reconnectAttempt = 0;
+let _stableTimer: ReturnType<typeof setTimeout> | null = null;
+const STABLE_AFTER_MS = 60_000;
 let _signInFailures = 0;
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let _socket: WebSocket | null = null;
@@ -52,8 +54,14 @@ function _reconnectDelay(): number {
   return base + jitter;
 }
 
+function _clearStableTimer(): void {
+  if (_stableTimer) clearTimeout(_stableTimer);
+  _stableTimer = null;
+}
+
 function _scheduleReconnect(): void {
   if (!_active) return;
+  _clearStableTimer();
   _clearTimers();
   _destroySocket();
 
@@ -116,8 +124,14 @@ function _connect(token: string): void {
     }
 
     if (route.includes("auth/signIn:ok")) {
-      _reconnectAttempt = 0;
       _signInFailures = 0;
+      // Backoff resets once the socket has held, not here: a server that
+      // authenticates and then closes would otherwise reconnect every second.
+      _clearStableTimer();
+      _stableTimer = setTimeout(() => {
+        _stableTimer = null;
+        _reconnectAttempt = 0;
+      }, STABLE_AFTER_MS);
       log.info("[WFMListener] Authenticated, listening for events");
       return;
     }
@@ -160,11 +174,19 @@ export function startListening(
   _connect(token);
 }
 
+/** WFM rotates the session token on ordinary responses; without this the next
+ *  reconnect would present the dead one and the listener would give up. */
+export function updateListenerToken(token: string): void {
+  if (!_active || !token || token === _token) return;
+  _token = token;
+}
+
 export function stopListening(): void {
   _active = false;
   _token = null;
   _onEvent = null;
   _onAuthGiveUp = null;
+  _clearStableTimer();
   _clearTimers();
   _destroySocket();
   _reconnectAttempt = 0;

@@ -1,6 +1,6 @@
 import type { ViewName } from "./views.js";
+import type { OverlayLayoutKind } from "../../config/shared/overlayLayout.js";
 
-/** The hand-picked palette a preset defines. Everything else is derived from it. */
 export interface ThemeBaseColors {
   bgDeep: string;
   bgBase: string;
@@ -28,7 +28,6 @@ export interface ThemeBaseColors {
   gradeDefault: string;
 }
 
-/** Semantic roles. Defaults come from `deriveThemeColors`; users may override any of them. */
 export interface ThemeDerivedColors {
   textHeading: string;
   textBody: string;
@@ -70,7 +69,6 @@ export interface ThemeDerivedColors {
 export interface ThemeColors extends ThemeBaseColors, ThemeDerivedColors {}
 
 export interface ThemeFontSizes {
-  /** Global scale multiplier, 0.75-1.5; default 1.0 */
   globalScale: number;
   /** Optional per-category overrides (rem values) */
   headingSize?: number;
@@ -78,8 +76,7 @@ export interface ThemeFontSizes {
   smallSize?: number;
 }
 
-/** One tab's own palette and text sizes. Absent keys follow the global theme.
-    `globalScale` is never stored here: rem resolves against the root. */
+/** `globalScale` is never stored here: rem resolves against the root. */
 export interface ViewThemeOverride {
   colors?: Partial<ThemeBaseColors>;
   fontSizes?: Partial<ThemeFontSizes>;
@@ -94,13 +91,13 @@ export interface ThemeEffects {
   surfaceStyle: ThemeSurfaceStyle;
   glass: boolean;
   glassBlurPx: number;
+  overlayOpacity: number;
+  overlayOpacityOverrides?: Partial<Record<OverlayLayoutKind, number>>;
   relicCardStyle: RelicCardStyle;
 }
 
 export interface ThemeBranding {
-  /** Data-URL of a user-provided logo image, or null for default */
   logoDataUrl: string | null;
-  /** Custom app name, or null for default "WARFRAME COMPANION" */
   appName: string | null;
 }
 
@@ -113,24 +110,20 @@ export interface CustomThemePreset {
 }
 
 export interface ThemeSettings {
-  /** Schema version for future migrations */
   version: 1;
-  /** Name of active preset, or "custom" */
   activePreset: string;
   colors: ThemeColors;
   fontSizes: ThemeFontSizes;
   effects: ThemeEffects;
   customThemes: CustomThemePreset[];
   branding: ThemeBranding;
-  /** Enable contrast-safe mode: auto-adjusts text colors when backgrounds are too similar */
   contrastSafeMode: boolean;
-  /** Legacy per-view accents. Read at load, folded into `viewOverrides` and then
-      left empty, so nothing writes it any more. Kept so old saves still migrate. */
+  /** Legacy: read at load, folded into `viewOverrides`, then left empty. Kept so
+      old saves still migrate. */
   viewAccents: Partial<Record<ViewName, string>>;
   viewOverrides: Partial<Record<ViewName, ViewThemeOverride>>;
 }
 
-/** Keys of ThemeColors mapped to CSS custom property names */
 export const THEME_COLOR_CSS_MAP: Record<keyof ThemeColors, string> = {
   bgDeep: "--bg-deep",
   bgBase: "--bg-base",
@@ -205,4 +198,5 @@ export const THEME_EFFECT_CSS_MAP = {
   controlBg: "--ui-control-bg",
   controlBorder: "--ui-control-border",
   backdropBlur: "--ui-backdrop-blur",
+  overlayOpacity: "--overlay-opacity",
 } as const;

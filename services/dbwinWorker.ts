@@ -6,7 +6,6 @@ import koffi from "koffi";
 import { DebugLineGate } from "./debugLineFilter";
 import { enumProcessIds, isWarframeExePath, queryExePath } from "./win32Process";
 
-// Win32 API declarations
 const kernel32 = koffi.load("kernel32.dll");
 
 const CreateFileMappingW = kernel32.func("CreateFileMappingW", "void *", [
@@ -55,23 +54,17 @@ const ERROR_ALREADY_EXISTS = 183;
 const DBWIN_BUFFER_SIZE = 4096;
 // INVALID_HANDLE_VALUE = (HANDLE)(-1) = 0xFFFF_FFFF_FFFF_FFFF on 64-bit
 const INVALID_HANDLE_VALUE = -1n;
-// How long to block on WaitForSingleObject before re-checking the stop flag
 const WAIT_TIMEOUT_MS = 500;
 const THREAD_PRIORITY_HIGHEST = 2;
-// Phase 0: sleep this long between Warframe presence checks
 const WARFRAME_POLL_MS = 2000;
-// Phase 1: re-confirm Warframe is still running this often (milliseconds)
 const WARFRAME_RECHECK_MS = 5000;
 // Decoded as a typed-array COPY into V8 memory. koffi.view() is a fatal napi
 // error under Electron's memory cage (no external ArrayBuffers) - never use it.
 const uint8ArrayType = koffi.array("uint8", DBWIN_BUFFER_SIZE, "Typed");
 
-// Drop irrelevant lines before IPC; Proton uses the same filter and suppression.
 const lineGate = new DebugLineGate();
 
-// Cache image-name checks per phase; a restart clears stale PID ownership.
 const _pidIsWarframe = new Map<number, boolean>();
-// Bound PID churn from unrelated debug-emitting processes within one phase.
 const MAX_PID_CACHE_SIZE = 256;
 
 function rememberPid(pid: number, value: boolean): void {
@@ -86,8 +79,7 @@ function isWarframePid(pid: number): boolean {
   if (cached !== undefined) return cached;
 
   const query = queryExePath(pid);
-  // Process may have exited; treat as not Warframe and don't cache -
-  // if the PID reappears it may be Warframe next time.
+  // Process may have exited; treat as not Warframe and don't cache.
   if (query.status === "unreachable") return false;
 
   const result = query.status === "ok" && isWarframeExePath(query.path);
@@ -126,7 +118,6 @@ function runDbwinLoop(): void {
 
   const alreadyExists = GetLastError() === ERROR_ALREADY_EXISTS;
 
-  // Map with read access only - the writer fills the buffer, we just read it
   const pBuf = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
   if (!pBuf) {
     parentPort?.postMessage({
@@ -172,8 +163,6 @@ function runDbwinLoop(): void {
       }
 
       const now = Date.now();
-      // Check both on timeout AND on message receipt (so that if noisy
-      // non-Warframe processes keep the loop busy, we still detect exit).
       if (now > warframeRecheckAt) {
         warframeRecheckAt = now + WARFRAME_RECHECK_MS;
         _pidIsWarframe.clear(); // refresh cache; Warframe may have a new PID
@@ -188,23 +177,21 @@ function runDbwinLoop(): void {
       let end = buf.indexOf(0, 4);
       if (end < 0) end = DBWIN_BUFFER_SIZE;
       if (end <= 4) continue;
-      // utf8 to match the file poll - latin1 split multi-byte glyphs into
-      // mojibake, so the same line produced different strings per source.
+      // utf8 to match the file poll - latin1 split multi-byte glyphs into mojibake.
       const msg = buf.toString("utf8", 4, end);
 
-      // Pre-filter + repeat suppression - unfiltered repeats would flood
-      // the main thread and starve async OCR.
       if (lineGate.wants(msg, now)) {
         parentPort?.postMessage({ type: "line", pid, msg });
       }
     }
   } finally {
+    // A writer already blocked in OutputDebugString waits out the Win32 ten second
+    // timeout if BUFFER_READY is never signalled again.
+    SetEvent(hReady);
     UnmapViewOfFile(pBuf);
     CloseHandle(hMap);
     CloseHandle(hReady);
     CloseHandle(hData);
-    // Flush the PID cache on every Phase 1 exit so that a restarted Warframe
-    // process (new PID) is not denied based on a stale cache entry.
     _pidIsWarframe.clear();
   }
 }
@@ -218,14 +205,12 @@ function run(): void {
   while (Atomics.load(stopFlag, 0) === 0) {
     while (Atomics.load(stopFlag, 0) === 0) {
       if (isWarframeRunning()) break;
-      // Atomics.wait sleeps up to WARFRAME_POLL_MS but wakes immediately
-      // (returning "not-equal") if the parent sets stopFlag != 0.
+      // Atomics.wait wakes immediately ("not-equal") when the parent sets stopFlag != 0.
       Atomics.wait(stopFlag, 0, 0, WARFRAME_POLL_MS);
     }
 
     if (Atomics.load(stopFlag, 0) !== 0) break;
 
-    // runDbwinLoop() returns when Warframe exits or stopFlag is set.
     runDbwinLoop();
   }
 

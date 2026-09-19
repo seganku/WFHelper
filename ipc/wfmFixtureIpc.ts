@@ -5,6 +5,7 @@ import { app } from "electron";
 import { assertMainRendererSender, handleAuthorized } from "./ipcSecurity";
 import { parseSetVisiblePayload, parseUpdateOrderPayload } from "./wfmValidators";
 import { withScope } from "../services/logger";
+import type { WfmContract } from "../config/shared/wfmContracts";
 import {
   WFM_SIGNIN,
   WFM_SIGNOUT,
@@ -41,6 +42,7 @@ interface FixtureOrder {
 interface FixtureOrders {
   sell: FixtureOrder[];
   buy: FixtureOrder[];
+  contracts: WfmContract[];
 }
 
 const FIXTURE_SESSION = { loggedIn: true, userName: "E2E Tester", platform: "pc" };
@@ -50,6 +52,7 @@ function loadFixtureOrders(file: string): FixtureOrders {
   return {
     sell: Array.isArray(parsed.sell) ? parsed.sell : [],
     buy: Array.isArray(parsed.buy) ? parsed.buy : [],
+    contracts: Array.isArray(parsed.contracts) ? parsed.contracts : [],
   };
 }
 
@@ -69,8 +72,7 @@ export function registerWfmFixtures(): boolean {
 
   const allOrders = () => [...orders.sell, ...orders.buy];
 
-  // Rewriting the fixture mid-run stands in for a change made outside the app
-  // (unlisted on the website). Unchanged file keeps in-app edits in memory.
+  // Rewriting the fixture mid-run stands in for a change made outside the app.
   let fixtureMtimeMs = 0;
   const syncFixtureFromDisk = (): void => {
     try {
@@ -80,6 +82,7 @@ export function registerWfmFixtures(): boolean {
       if (fixtureMtimeMs !== 0) {
         orders.sell = reloaded.sell;
         orders.buy = reloaded.buy;
+        orders.contracts = reloaded.contracts;
       }
       fixtureMtimeMs = mtimeMs;
     } catch (err) {
@@ -102,12 +105,15 @@ export function registerWfmFixtures(): boolean {
       buy: orders.buy.map((entry) => ({ ...entry })),
     };
   });
-  handleAuthorized(WFM_GET_CONTRACTS, assertMainRendererSender, async () => ({
-    contracts: [],
-    page: 1,
-    totalPages: 1,
-    hasMore: false,
-  }));
+  handleAuthorized(WFM_GET_CONTRACTS, assertMainRendererSender, async () => {
+    syncFixtureFromDisk();
+    return {
+      contracts: orders.contracts.map((entry) => ({ ...entry })),
+      page: 1,
+      totalPages: 1,
+      hasMore: false,
+    };
+  });
   handleAuthorized(WFM_CREATE_ORDER, assertMainRendererSender, async () => ({
     error: "Order creation is not available in fixture mode.",
   }));

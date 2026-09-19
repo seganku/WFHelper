@@ -1,7 +1,19 @@
 :root {
-  --bg: var(--bg-deep, #060a12);
-  --surface: var(--bg-surface, #111827);
-  --raised: var(--bg-raised, #162340);
+  --bg: color-mix(
+    in srgb,
+    var(--bg-deep, #060a12) var(--overlay-opacity-current, 100%),
+    transparent
+  );
+  --surface: color-mix(
+    in srgb,
+    var(--bg-surface, #111827) var(--overlay-opacity-current, 100%),
+    transparent
+  );
+  --raised: color-mix(
+    in srgb,
+    var(--bg-raised, #162340) var(--overlay-opacity-current, 100%),
+    transparent
+  );
   --border: var(--border-strong, rgba(79, 158, 255, 0.25));
   --accent: #4f9eff;
   --accent-bright: #7db8ff;

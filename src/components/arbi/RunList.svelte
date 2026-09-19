@@ -12,15 +12,12 @@
   interface Props {
     runs: TRun[];
     onSelect: (id: string) => void;
-    /** The feature's own columns, between the date and the log size. */
     headers: Snippet;
     cells: Snippet<[TRun]>;
     deleteRun: (id: string) => Promise<void>;
     deleteRunLog: (id: string) => Promise<void>;
-    /** Hooks the e2e specs locate the table and its rows by. */
     listAttrs?: Record<string, string>;
     rowAttrs?: (run: TRun) => Record<string, string>;
-    /** Selection column; null for a list without bulk actions. */
     selected?: Set<string> | null;
     onToggleSelect?: (id: string) => void;
     onToggleSelectAll?: () => void;
@@ -56,7 +53,7 @@
   }
 </script>
 
-<div class="overflow-x-auto" {...listAttrs}>
+<div class="runs-scroll overflow-x-auto" {...listAttrs}>
   <table class="w-full border-collapse text-sm">
     <thead>
       <tr class="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
@@ -154,3 +151,13 @@
     </tbody>
   </table>
 </div>
+
+<style>
+  .runs-scroll {
+    container-type: inline-size;
+  }
+  .runs-scroll :global(th),
+  .runs-scroll :global(td) {
+    padding-inline: clamp(0.5rem, 1.25cqi, 0.75rem);
+  }
+</style>

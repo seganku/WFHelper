@@ -50,10 +50,11 @@ export interface ComponentEntry {
   drops?: DropEntry[];
 }
 
-/** Renderer-facing subset of ItemEntry sent via IPC. */
 export interface RendererItemEntry {
   /** English. Stays the join key for warframe.market, OCR and by-name lookups. */
   name: string;
+  /** Generated from an internal path because no source supplied an English name. */
+  nameIsFallback?: true;
   /** Active game language, present only when it differs from `name`. Display only. */
   displayName?: string;
   /** Art is the framed wiki card, so a marketplace thumbnail must not replace it. */

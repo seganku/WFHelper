@@ -79,6 +79,23 @@ describe("safeToList floors", () => {
     expect(verdict).toMatchObject({ total: 3, reserved: 1, safe: 2 });
   });
 
+  it("frees the last copy of a frame that is already mastered", () => {
+    const verdict = safeToList(
+      row({ internalName: FRAME, uniqueName: FRAME, amount: 1, inventoryGroup: "equipment" }),
+      context({ masteredUniqueNames: new Set([FRAME]) }),
+    );
+    expect(verdict).toMatchObject({ total: 1, reserved: 0, safe: 1 });
+    expect(verdict.reservations).toEqual([]);
+  });
+
+  it("keeps the last copy while no mastery data has arrived", () => {
+    const verdict = safeToList(
+      row({ internalName: FRAME, uniqueName: FRAME, amount: 1 }),
+      buildSafetyContext({ itemDb: DB, pinnedRequirements: new Map<string, number>() }),
+    );
+    expect(ruleQuantity(verdict.reservations, "lastCopy")).toBe(1);
+  });
+
   it("does not keep a last copy of a plain mod", () => {
     const verdict = safeToList(
       row({ internalName: MOD, uniqueName: MOD, amount: 4, inventoryGroup: "mods" }),
@@ -635,11 +652,88 @@ describe("complete-set keep flag", () => {
   });
 
   it("does nothing without the flag", () => {
-    const ctx = context();
+    const ctx = context({ masteredUniqueNames: new Set([FRAME]) });
     expect(
       safeToList(row({ internalName: `${FRAME}#set`, amount: 3, inventoryGroup: "full_sets" }), ctx)
         .safe,
     ).toBe(3);
+  });
+});
+
+describe("full-set rows against their parts", () => {
+  const setRow = row({ internalName: `${FRAME}#set`, amount: 2, inventoryGroup: "full_sets" });
+
+  it("holds back the sets its most constrained part cannot cover", () => {
+    const ctx = context({
+      ownedCounts: new Map([
+        [CHASSIS_COMPONENT, 2],
+        [NEUROPTICS, 4],
+      ]),
+    });
+    const chassis = safeToList(
+      row({ internalName: CHASSIS_COMPONENT, uniqueName: CHASSIS_COMPONENT, amount: 2 }),
+      ctx,
+    );
+    const neuroptics = safeToList(
+      row({ internalName: NEUROPTICS, uniqueName: NEUROPTICS, amount: 4 }),
+      ctx,
+    );
+    const set = safeToList(setRow, ctx);
+
+    expect(chassis).toMatchObject({ reserved: 1, safe: 1 });
+    expect(neuroptics).toMatchObject({ reserved: 2, safe: 2 });
+    expect(set).toMatchObject({ total: 2, reserved: 1, safe: 1 });
+    expect(ruleQuantity(set.reservations, "unmasteredRecipe")).toBe(1);
+  });
+
+  it("frees the whole set once nothing above its parts is outstanding", () => {
+    const ctx = context({ masteredUniqueNames: new Set([FRAME]) });
+    expect(safeToList(setRow, ctx)).toMatchObject({ reserved: 0, safe: 2 });
+  });
+});
+
+describe("renamed part blueprints", () => {
+  const AMBASSADOR = "/Lotus/Weapons/Corpus/LongGuns/CrpArSniper/CrpArSniperRifle";
+  const RECEIVER = "/Lotus/Types/Recipes/Weapons/WeaponParts/CrpArSniperReceiver";
+  const RECEIVER_BP = "/Lotus/Types/Recipes/Weapons/WeaponParts/AmbassadorReceiverBlueprint";
+
+  const renamedDb: Record<string, ItemDbEntry> = {
+    [AMBASSADOR]: {
+      name: "Ambassador",
+      masterable: true,
+      components: [{ name: "Receiver", uniqueName: RECEIVER, itemCount: 1 }],
+    },
+    [RECEIVER]: { name: "Ambassador Receiver", isBuildComponent: true, componentOf: AMBASSADOR },
+    [RECEIVER_BP]: {
+      name: "Ambassador Receiver Blueprint",
+      isBuildComponent: true,
+      componentOf: AMBASSADOR,
+      buildsProduct: RECEIVER,
+    },
+  };
+
+  const blueprintRow = row({
+    internalName: RECEIVER_BP,
+    uniqueName: RECEIVER_BP,
+    amount: 2,
+  });
+
+  it("reserves a blueprint whose product shares no stem with it", () => {
+    const ctx = buildSafetyContext({
+      itemDb: renamedDb,
+      masteredUniqueNames: new Set(),
+      pinnedRequirements: new Map(),
+    });
+    expect(safeToList(blueprintRow, ctx)).toMatchObject({ total: 2, reserved: 1, safe: 1 });
+  });
+
+  it("releases it once the weapon is mastered", () => {
+    const ctx = buildSafetyContext({
+      itemDb: renamedDb,
+      masteredUniqueNames: new Set([AMBASSADOR]),
+      pinnedRequirements: new Map(),
+    });
+    expect(safeToList(blueprintRow, ctx)).toMatchObject({ reserved: 0, safe: 2 });
   });
 });
 

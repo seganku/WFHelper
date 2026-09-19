@@ -1,4 +1,5 @@
 import type {
+  FoundryBuildingItem,
   FoundryData,
   FoundryRecipeItem,
   ItemDbEntry,
@@ -370,6 +371,27 @@ export function isFoundryRecipeReady(
 export function foundryBuildProducts(foundry: FoundryData): Set<string> {
   const products = new Set<string>();
   for (const build of foundry.building) {
+    const uniqueName = build.productUniqueName ?? build.uniqueName;
+    if (uniqueName) products.add(uniqueName);
+  }
+  return products;
+}
+
+/** A finished build stays in the foundry, and keeps its parts spent, until the
+ *  player claims it. */
+export function isFoundryBuildClaimable(
+  build: Pick<FoundryBuildingItem, "endDate">,
+  nowMs: number,
+): boolean {
+  return build.endDate != null && build.endDate.getTime() <= nowMs;
+}
+
+/** The `foundryBuildProducts` subset that is finished and waiting to be claimed,
+ *  keyed the same way so the same alias lookup finds it. */
+export function foundryClaimableProducts(foundry: FoundryData, nowMs: number): Set<string> {
+  const products = new Set<string>();
+  for (const build of foundry.building) {
+    if (!isFoundryBuildClaimable(build, nowMs)) continue;
     const uniqueName = build.productUniqueName ?? build.uniqueName;
     if (uniqueName) products.add(uniqueName);
   }

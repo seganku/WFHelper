@@ -152,6 +152,8 @@ import {
   endSessionCleanly,
   markStartupSurvived,
 } from "./services/sessionHealth";
+import { summarizeCrashDump } from "./services/minidumpSummary";
+import { drainNativeOcr } from "./services/ocrServer";
 
 // Keep native crash dumps local under userData\Crashes.
 crashReporter.start({ uploadToServer: false });
@@ -421,7 +423,8 @@ function reportSessionHealth(profileStage: ProfileStage): void {
     );
   }
 
-  const previous = beginSession(app.getPath("userData"));
+  const userData = app.getPath("userData");
+  const previous = beginSession(userData);
   if (previous !== "unclean") return;
 
   const dumps = crashDumpsFromPreviousSession(app.getPath("crashDumps"));
@@ -429,6 +432,13 @@ function reportSessionHealth(profileStage: ProfileStage): void {
     `[Startup] previous session ended without shutting down` +
       (dumps.length > 0 ? `; crash dump: ${dumps[0]}` : " (no crash dump)"),
   );
+  if (dumps.length > 0) {
+    void summarizeCrashDump(path.join(app.getPath("crashDumps"), "reports", dumps[0])).then(
+      (summary) => {
+        if (summary) log.warn(`[Startup] crash dump says: ${summary}`);
+      },
+    );
+  }
   if (foreign.length > 0) log.warn(`[Startup] foreign module paths: ${foreign.join(", ")}`);
 
   const injectors = describeKnownInjectors(foreign);
@@ -797,9 +807,10 @@ async function syncOverlayHotkeyGate(): Promise<void> {
   }
 }
 
-// The shortest away delay the setting allows is a minute, so a 30s sample is
-// fine-grained enough; presence itself decides whether the reading is wanted.
-const IDLE_POLL_MS = 30_000;
+// The sample rate is the whole latency of coming back: the away threshold is
+// only checked here, so a coarse interval strands an active player as invisible
+// for up to one tick. GetLastInputInfo is cheap enough to ask often.
+const IDLE_POLL_MS = 5_000;
 let _idlePollTimer: ReturnType<typeof setInterval> | null = null;
 
 function startIdlePoll(): void {
@@ -846,6 +857,7 @@ app.on("before-quit", (event) => {
   // hold quit until the thread has exited (bounded).
   if (!_dbwinQuitDone) {
     event.preventDefault();
+    void drainNativeOcr();
     void eeLogMonitor.dbwinWorkerStopped().finally(() => {
       _dbwinQuitDone = true;
       app.quit();

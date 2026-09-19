@@ -138,10 +138,9 @@ pnpm run dist:win   # build the NSIS installer
 ## Support
 
 WFHelper is free and open source, with no ads or accounts. If it saves you
-plat, [Patreon](https://www.patreon.com/WFHelper) or
-[GitHub Sponsors](https://github.com/sponsors/MrZockerator) helps cover the
-Cloudflare infrastructure it runs on. Supporters get a Discord role and a
-thank-you in the app.
+plat, [Patreon](https://www.patreon.com/WFHelper) helps cover the Cloudflare
+infrastructure it runs on. Supporters get a Discord role and a thank-you in
+the app.
 
 ## Disclaimer
 

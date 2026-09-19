@@ -45,6 +45,15 @@ const itemDb = {
     isBuildComponent: true,
     componentOf: "/W/LexPrime",
   },
+  "/Types/Recipes/DayAspectComponent": {
+    name: "Day Aspect",
+    isBuildComponent: true,
+  },
+  "/Types/Recipes/DayAspectChassis": {
+    name: "Day Aspect Chassis",
+    isBuildComponent: true,
+    componentOf: "/Types/Recipes/DayAspectComponent",
+  },
 } as unknown as Record<string, ItemDbEntry>;
 
 const mastery = {
@@ -107,6 +116,47 @@ describe("buildPartMasteryResolver", () => {
     expect(cold({ name: "Braton Prime Barrel", internalName: "/W/BratonPrimeBarrel" })).toEqual({});
   });
 
+  it("reports a parent waiting in the foundry, and nothing for the other parts", () => {
+    const claiming = buildPartMasteryResolver(itemDb, mastery, new Set(["/W/LexPrime"]));
+    expect(claiming({ name: "Lex Prime Barrel", internalName: "/W/LexPrimeBarrel" })).toEqual({
+      parentMastered: true,
+      parentOwned: false,
+      parentClaimable: true,
+      component: true,
+    });
+    expect(
+      claiming({ name: "Soma Prime Stock", internalName: "/W/SomaPrimeStock" }).parentClaimable,
+    ).toBeUndefined();
+  });
+
+  it("matches a claimable parent across the Component and Blueprint spellings", () => {
+    const claiming = buildPartMasteryResolver(
+      itemDb,
+      mastery,
+      new Set(["/Types/Recipes/DayAspectBlueprint"]),
+    );
+    expect(
+      claiming({ name: "Day Aspect Chassis", internalName: "/Types/Recipes/DayAspectChassis" }),
+    ).toEqual({ parentClaimable: true, component: true });
+  });
+
+  it("reads a claimable parent on a set row too", () => {
+    const claiming = buildPartMasteryResolver(itemDb, mastery, new Set(["/W/LexPrime"]));
+    expect(claiming({ name: "Lex Prime Set" })).toEqual({
+      parentMastered: true,
+      parentOwned: false,
+      parentClaimable: true,
+    });
+  });
+
+  it("resolves the foundry alone when no mastery data has arrived", () => {
+    const claiming = buildPartMasteryResolver(itemDb, null, new Set(["/W/LexPrime"]));
+    expect(claiming({ name: "Lex Prime Barrel", internalName: "/W/LexPrimeBarrel" })).toEqual({
+      parentClaimable: true,
+      component: true,
+    });
+  });
+
   it("reports the build a part feeds as owned only while it is in the inventory", () => {
     expect(resolve({ name: "Braton Prime Barrel", internalName: "/W/BratonPrimeBarrel" })).toEqual({
       parentMastered: true,
@@ -144,19 +194,38 @@ describe("itemMarksFor", () => {
     expect(itemMarksFor({ parentMastered: true, parentOwned: true })).toEqual({
       mastered: true,
       crafted: true,
+      foundry: false,
     });
     expect(itemMarksFor({ parentMastered: true, parentOwned: false })).toEqual({
       mastered: true,
       crafted: false,
+      foundry: false,
     });
     expect(itemMarksFor({ parentMastered: false, parentOwned: true })).toEqual({
       mastered: false,
       crafted: true,
+      foundry: false,
+    });
+  });
+
+  it("shows F for a parent waiting in the foundry", () => {
+    expect(itemMarksFor({ parentMastered: true, parentClaimable: true })).toEqual({
+      mastered: true,
+      crafted: false,
+      foundry: true,
+    });
+  });
+
+  it("lets C win over F, since the built parent is the stronger answer", () => {
+    expect(itemMarksFor({ parentOwned: true, parentClaimable: true })).toEqual({
+      mastered: false,
+      crafted: true,
+      foundry: false,
     });
   });
 
   it("shows nothing for a row no mastery pass stamped", () => {
-    expect(itemMarksFor({})).toEqual({ mastered: false, crafted: false });
+    expect(itemMarksFor({})).toEqual({ mastered: false, crafted: false, foundry: false });
   });
 });
 

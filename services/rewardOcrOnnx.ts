@@ -4,6 +4,7 @@ import { withScope } from "./logger";
 import { normalizeErrorMessage } from "../config/shared/errors";
 import { ocrStripTargetWidth, otsuThreshold } from "./rewardScannerImage";
 import { paddleRecognizerAvailable, recognizePaddleCrops, type RgbCrop } from "./rivenOcrOnnx";
+import { loadSharp } from "./sharpRuntime";
 
 const log = withScope("rewardOcrOnnx");
 
@@ -119,7 +120,7 @@ export async function recognizeRewardStripOnnx(stripPng: Buffer): Promise<Reward
   try {
     if (!rewardOcrOnnxAvailable()) return null;
 
-    const sharp: (typeof import("sharp"))["default"] = require("sharp");
+    const sharp = loadSharp();
     const meta = await sharp(stripPng).metadata();
     const srcW = meta.width ?? 0;
     const srcH = meta.height ?? 0;

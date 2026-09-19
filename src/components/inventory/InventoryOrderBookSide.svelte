@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatUnitPlatinum } from "../../../config/shared/wfmOrders.js";
   import { tr, type MessageKey } from "../../lib/i18n.js";
   import type { OrderBookEntry } from "../../lib/wfm/orderBook.js";
   import type { OrderType } from "../../types/market.js";
@@ -85,7 +86,21 @@
             >
             <span
               class="inventory-orderbook-plat text-right font-display text-xs font-bold text-accent-bright"
-              >{entry.platinum}p</span
+              data-orderbook-unit-plat={formatUnitPlatinum(entry.unitPlatinum)}
+              title={entry.perTrade > 1
+                ? $tr("orderbook.perTradeTitle", {
+                    platinum: entry.platinum,
+                    count: entry.perTrade,
+                  })
+                : undefined}
+              >{formatUnitPlatinum(entry.unitPlatinum)}p{#if entry.perTrade > 1}<span
+                  class="block text-[0.62rem] font-normal text-text-muted"
+                  data-orderbook-per-trade={entry.perTrade}
+                  >{$tr("orderbook.perTrade", {
+                    count: entry.perTrade,
+                    platinum: entry.platinum,
+                  })}</span
+                >{/if}</span
             >
           </div>
           <div class="flex gap-1.5">

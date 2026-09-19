@@ -1,6 +1,16 @@
 :root {
-  --bg: color-mix(in oklab, var(--bg-deep, #060a12) 92%, transparent);
-  --surface: color-mix(in oklab, var(--bg-surface, #111827) 94%, transparent);
+  --bg: color-mix(
+    in srgb,
+    color-mix(in oklab, var(--bg-deep, #060a12) 92%, transparent)
+      var(--overlay-opacity-current, 100%),
+    transparent
+  );
+  --surface: color-mix(
+    in srgb,
+    color-mix(in oklab, var(--bg-surface, #111827) 94%, transparent)
+      var(--overlay-opacity-current, 100%),
+    transparent
+  );
   --border: color-mix(in oklab, var(--border-strong, rgba(212, 168, 67, 0.25)) 80%, transparent);
   --accent: #d4a843;
   --accent-bright: #f0c95c;
@@ -19,8 +29,7 @@
   box-sizing: border-box;
 }
 
-/* #panel paints the surface, never the page: an html/body background would leak
-   through a keep-mapped hide (Wayland, transparent Windows) as a dark box. */
+/* An html/body background would leak through a keep-mapped hide (Wayland, transparent Windows) as a dark box. */
 html,
 body {
   background: transparent;
@@ -36,7 +45,11 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
-  background: var(--bg-surface, #111827);
+  background: color-mix(
+    in srgb,
+    var(--bg-surface, #111827) var(--overlay-opacity-current, 100%),
+    transparent
+  );
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
@@ -58,8 +71,7 @@ body {
   border-bottom: 0;
 }
 
-/* No app-region drag anywhere: passive mode is click-through on every platform,
-   and Linux never refreshes the region, so a stale caption ate every click. */
+/* No app-region drag anywhere: Linux never refreshes the region, so a stale caption ate every click. */
 #header {
   -webkit-app-region: no-drag;
 }
@@ -115,7 +127,6 @@ body {
   border-radius: 50%;
   /* steps(): ~9 repaints/s - the window is software-rendered over the game. */
   animation: spin 0.85s steps(8) infinite;
-  /* A narrow panel squashed the ring into an ellipse without this. */
   flex-shrink: 0;
 }
 
@@ -140,7 +151,6 @@ body {
   overflow-y: auto;
 }
 
-/* Planner scrolls; keep the close X clear of its scrollbar. */
 .planner-mode #header {
   right: 14px;
 }
@@ -216,7 +226,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 2px;
 }
 
@@ -432,14 +442,17 @@ body {
 }
 
 .slot-name {
-  font-size: 14px;
+  --slot-name-size: 14px;
+  font-size: calc(var(--slot-name-size) * var(--reward-fit-scale, 1));
   color: var(--text);
   line-height: 1.25;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  min-height: 34px;
+  height: calc(var(--slot-name-size) * 2.5);
+  min-height: calc(var(--slot-name-size) * 2.5);
+  flex-shrink: 0;
 }
 
 .slot-name.empty {
@@ -451,7 +464,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: auto;
+  margin-top: 0;
   padding-top: 2px;
 }
 
@@ -562,9 +575,9 @@ body {
 }
 
 .slot-set-parts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  gap: 2px;
   width: 100%;
 }
 
@@ -572,10 +585,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 108px;
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 5px;
-  padding: 3px 6px;
+  padding: 3px 3px;
   background: rgba(255, 255, 255, 0.045);
   color: var(--muted);
   font-size: 13px;
@@ -604,7 +617,11 @@ body {
 }
 
 .slot-set-part-count {
-  min-width: 26px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .slot-set-part.owned {
@@ -617,12 +634,9 @@ body {
   color: var(--muted);
 }
 
-/* The part this reward actually is. Owned/missing already own the border tint,
-   so this adds an accent ring and fill to read as "this one" at a glance. */
 .slot-set-part.is-reward {
   border-color: var(--accent-bright);
   background: color-mix(in oklab, var(--accent) 22%, transparent);
-  box-shadow: 0 0 0 1px var(--accent-bright);
 }
 
 .slot-set-part.is-reward .slot-set-part-count {

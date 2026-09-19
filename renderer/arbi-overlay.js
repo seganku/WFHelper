@@ -142,7 +142,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     window.arbiSummary.ready();
   };
-  window.overlayTheme.bootstrapOverlayTheme(() => window.arbiSummary.getThemeVars());
+  window.overlayTheme.bootstrapOverlayTheme(() => window.arbiSummary.getThemeVars(), "arbiSummary");
 
   el("btn-close").addEventListener("click", () => {
     if (!preview) window.arbiSummary.close();

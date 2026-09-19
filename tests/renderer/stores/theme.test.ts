@@ -21,6 +21,85 @@ describe("theme store", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it("keeps per-overlay overrides independent through preset edits, reset and storage", async () => {
+    vi.useFakeTimers();
+    try {
+      const { themeSettings } = await freshStore();
+      const callerOverrides = { reward: 0.4, planner: 0.8 };
+      themeSettings.setEffects({ overlayOpacity: 0.6, overlayOpacityOverrides: callerOverrides });
+      callerOverrides.reward = 1;
+      expect(get(themeSettings).effects.overlayOpacityOverrides?.reward).toBe(0.4);
+      themeSettings.saveCustomTheme("Separate overlays");
+      const saved = get(themeSettings);
+      const customId = saved.activePreset;
+      expect(saved.customThemes[0]?.effects.overlayOpacityOverrides).not.toBe(
+        saved.effects.overlayOpacityOverrides,
+      );
+      themeSettings.setOverlayOpacity("reward", 0.5);
+      expect(saved.effects.overlayOpacityOverrides?.reward).toBe(0.4);
+      expect(saved.customThemes[0]?.effects.overlayOpacityOverrides?.reward).toBe(0.4);
+      themeSettings.setEffects({ overlayOpacity: 0.7 });
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({
+        reward: 0.5,
+        planner: 0.8,
+      });
+      themeSettings.setOverlayOpacity("reward", null);
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({ planner: 0.8 });
+      themeSettings.setOverlayOpacity("rivenLeft", -1);
+      themeSettings.setOverlayOpacity("rivenRight", NaN);
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({
+        planner: 0.8,
+        rivenLeft: 0.3,
+      });
+      vi.advanceTimersByTime(400);
+      const { loadThemeSettings } = await import("../../../src/lib/theme/themeStorage.js");
+      expect(loadThemeSettings().effects.overlayOpacityOverrides).toEqual({
+        planner: 0.8,
+        rivenLeft: 0.3,
+      });
+      themeSettings.applyPreset("default");
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({});
+      themeSettings.applyPreset(customId);
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({
+        planner: 0.8,
+        rivenLeft: 0.3,
+      });
+      themeSettings.resetAll();
+      expect(get(themeSettings).effects.overlayOpacityOverrides).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves opacity through saved themes and storage, and restores preset defaults", async () => {
+    vi.useFakeTimers();
+    try {
+      const { themeSettings } = await freshStore();
+      themeSettings.setEffects({ overlayOpacity: 0.5 });
+      themeSettings.saveCustomTheme("Transparent overlays");
+      const customId = get(themeSettings).activePreset;
+      themeSettings.setEffects({ glass: true });
+      expect(get(themeSettings).effects.overlayOpacity).toBe(0.5);
+      vi.advanceTimersByTime(400);
+      const { loadThemeSettings } = await import("../../../src/lib/theme/themeStorage.js");
+      expect(loadThemeSettings().effects.overlayOpacity).toBe(0.5);
+      expect(loadThemeSettings().customThemes[0]?.effects.overlayOpacity).toBe(0.5);
+
+      themeSettings.applyPreset("default");
+      expect(get(themeSettings).effects.overlayOpacity).toBe(1);
+      themeSettings.applyPreset(customId);
+      expect(get(themeSettings).effects.overlayOpacity).toBe(0.5);
+      themeSettings.setEffects({ overlayOpacity: -1 });
+      expect(get(themeSettings).effects.overlayOpacity).toBe(0.3);
+      themeSettings.setEffects({ overlayOpacity: NaN });
+      expect(get(themeSettings).effects.overlayOpacity).toBe(1);
+      themeSettings.resetAll();
+      expect(get(themeSettings).effects.overlayOpacity).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stores and clears a per-view accent without switching preset", async () => {
     const { themeSettings } = await freshStore();
 

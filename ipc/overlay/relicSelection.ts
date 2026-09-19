@@ -14,25 +14,18 @@ import { withoutFoundryPending } from "../../config/shared/foundryPending";
 import * as itemDatabase from "../../services/itemDatabase";
 
 const RECOMMENDATION_SQUAD_SIZE = 4;
-/** How long computed recommendations stay cached before a full recompute. */
 const RECOMMENDATION_CACHE_TTL_MS = 10_000;
-/** Minimum gap between two EE.log trigger events to avoid double-firing. */
 const MIN_EELOG_TRIGGER_GAP_MS = 900;
-/** Max time for the OCR era-detection pass before falling back to desktop filter hint. */
-const ERA_DETECTION_TIMEOUT_MS = 1500;
+const ERA_DETECTION_TIMEOUT_MS = 2400;
+const ERA_DETECTION_LABEL_TIMEOUT_MS = 1500;
+const ERA_DETECTION_TOTAL_TIMEOUT_MS = 3000;
 const ERA_DETECTION_RETRY_DELAY_MS = 700;
-// The picker is not painted when the EE.log trigger lands, and reading it early
-// costs a whole OCR pass that finds nothing plus the retry delay above. Waiting
-// a little first is cheaper than the miss it avoids.
+const ERA_DETECTION_MIN_RETRY_MS = 600;
 const ERA_DETECTION_START_DELAY_MS = 100;
-/** Suppress overlay reopen for this long after an explicit close to prevent flicker. */
 const REOPEN_SUPPRESS_AFTER_CLOSE_MS = 3_000;
 
-/** Safety net if the InitMapping close never arrives; must outlast a long relic browse. */
 const OVERLAY_AUTO_HIDE_SUCCESS_MS = 120_000;
-/** Auto-hide after a detection failure - keep visible briefly so the user sees the state. */
 const OVERLAY_AUTO_HIDE_FAILURE_MS = 4_500;
-/** Hard ceiling for the detecting phase before giving up and hiding. */
 const OVERLAY_AUTO_HIDE_DETECTING_MAX_MS = 20_000;
 
 const QUALITY_ORDER: readonly (keyof OwnedCountRow)[] = Object.freeze([
@@ -161,7 +154,6 @@ type OverlayRecommendationControllerOptions = {
   };
   fs: typeof import("node:fs");
   cacheFilePath: string;
-  /** Overrides the wait before the first era capture. Tests drive real timers. */
   eraStartDelayMs?: number;
 };
 
@@ -183,9 +175,6 @@ function normalizeEra(value: unknown): string | null {
   return null;
 }
 
-// Built from the row label we composed, so it is language-independent even
-// though the rest of the overlay is translated. Short labels are dropped
-// because a two-word fragment can occur in the game's own relic screen.
 function overlayRowSignature(label: string): string | null {
   const normalized = normalizeOcrPhrase(label);
   return normalized.split(" ").length >= 3 ? normalized : null;
@@ -270,8 +259,6 @@ function computeSquadExpected(
   return ev;
 }
 
-// Reward-card pricing accepts snapshot medians up to this old; the planner's
-// EV ranking deliberately uses any age.
 const SNAPSHOT_PRICE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 function loadPersistedCacheMaps(
@@ -287,8 +274,6 @@ function loadPersistedCacheMaps(
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { prices, ducats };
 
-    // Snapshot format has a nested { prices: {...}, meta: {...} } structure.
-    // Legacy flat format had slug entries at the root level.
     const priceRoot = (parsed as Record<string, unknown>).prices;
     const priceEntries: Record<string, unknown> =
       priceRoot !== null && typeof priceRoot === "object" && !Array.isArray(priceRoot)
@@ -306,8 +291,6 @@ function loadPersistedCacheMaps(
       prices.set(normalized, median);
     }
 
-    // Snapshot also carries order summaries. Use them as a snapshot-only fallback
-    // when the median map does not have an entry for a reward slug.
     const orderSummaries = (parsed as Record<string, unknown>).orderSummaries;
     if (
       orderSummaries !== null &&
@@ -336,7 +319,6 @@ function loadPersistedCacheMaps(
       }
     }
 
-    // Extract ducat values from snapshot meta (only available in snapshot format).
     const meta = (parsed as Record<string, unknown>).meta;
     if (meta !== null && typeof meta === "object" && !Array.isArray(meta)) {
       for (const [slug, entry] of Object.entries(meta as Record<string, unknown>)) {
@@ -347,7 +329,6 @@ function loadPersistedCacheMaps(
       }
     }
   } catch {
-    // Corrupt/unreadable price-cache file - return whatever parsed so far.
     return { prices, ducats };
   }
 
@@ -361,7 +342,6 @@ function getCacheFileMtimeMs(fs: typeof import("node:fs"), cacheFilePath: string
     const mtimeMs = toFiniteOr((stat as { mtimeMs?: number }).mtimeMs, 0);
     return Number.isFinite(mtimeMs) && mtimeMs > 0 ? mtimeMs : 0;
   } catch {
-    // Missing/unstattable cache file - treat as mtime 0 (forces a refresh).
     return 0;
   }
 }
@@ -406,8 +386,6 @@ function pickBestOwnedQuality(
 
     const hasAnyPlat = platValues.some((value) => value != null);
     const hasAnyDucat = ducatValues.some((value) => value != null);
-    // Show relics even when neither price nor ducat data is available in the snapshot.
-    // Null EVs display as "-p / -d" in the overlay instead of pretending the value is 0.
 
     const platEv = hasAnyPlat
       ? computeSquadExpected(normalizedRewards, platValues, squadSize)
@@ -478,17 +456,11 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
   let lastKnownGameDisplayId: string | null = null;
   let desktopSquadSize: number = RECOMMENDATION_SQUAD_SIZE;
   let desktopTierHint: string | null = null;
-  // Reuse confident era OCR across endless rotations until the mission cache expires.
   let activeMissionTier: string | null = null;
   let activeMissionTierSetAt = 0;
-  // The mission tag overrides OCR because omnia tiles can look like Lith.
-  // It lasts through long endless runs and clears on the next non-fissure mission.
   let logMissionTier: string | null = null;
-  // Signatures of the rows currently painted on the overlay. The era capture
-  // can still catch our own panel, and reading it back re-confirms whatever
-  // era produced those rows, so a wrong era would never expire. They outlive
-  // the menu-closed event on purpose: a real log self-read 2s after it.
   let overlayRowSignatures: string[] = [];
+  let scanDismissBaselineMs = 0;
   let cache: {
     key: string;
     rows: RecommendationRow[];
@@ -513,8 +485,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
     return { prices, ducats };
   }
 
-  // Instant reward-card pricing from the same on-disk snapshot the planner
-  // reads; null (missing slug or file too old) sends the caller to live WFM.
   function getSnapshotPrice(slugInput: string): number | null {
     const normalized = normalizeWfmSlugKey(slugInput);
     if (!normalized) return null;
@@ -565,11 +535,12 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
 
     let totalOwnedCount = 0;
     const rows: RecommendationRow[] = [];
-    // omnia fissures accept every era - no filter
+    // An omnia fissure takes every era but Requiem: those open only in a Requiem fissure.
     const eraFilter = era === "omnia" ? null : era;
     for (const group of groups) {
       const groupEra = normalizeEra(group.tier);
       if (eraFilter && groupEra !== eraFilter) continue;
+      if (era === "omnia" && groupEra === "requiem") continue;
 
       const ownedRow = owned[group.key];
       if (!ownedRow) continue;
@@ -616,7 +587,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
           withoutFoundryPending(inventory, itemDatabase.isReusableBlueprint),
         )
       : null;
-    // Relic counts can stay unchanged while rewards are acquired or built.
     return rows.map((row) => ({
       ...row,
       rewards: row.rewards.map((reward) => {
@@ -698,7 +668,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
     try {
       const eraDetectStartedAt = Date.now();
 
-      // Era detection already captures the screen, so skip the separate anchor capture.
       const cacheAge = Date.now() - activeMissionTierSetAt;
       let era: string | null =
         logMissionTier ||
@@ -708,9 +677,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
       let eraConfidence = era ? 1.0 : 0;
 
       if (era) {
-        // Only the EE.log tag renews its lease; it is authoritative for the
-        // whole mission. An OCR guess ages from when it was read, or one wrong
-        // read survives every relic screen the player opens after it.
         if (logMissionTier) activeMissionTierSetAt = Date.now();
         log.info(
           logMissionTier
@@ -718,11 +684,9 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
             : `[RelicSelection] mission tier cache hit: ${era} (age ${Math.round(cacheAge / 1000)}s)`,
         );
         if (logMissionTier && typeof rewardScanner.detectRelicSelectionEra === "function") {
-          // Mission tags can linger into an omnia picker. A confident visible tab
-          // overrides the tag; missing tabs keep it for mid-mission screens.
           const labelDetection = rejectSelfRead(
             await rewardScanner.detectRelicSelectionEra({
-              timeoutMs: ERA_DETECTION_TIMEOUT_MS,
+              timeoutMs: ERA_DETECTION_LABEL_TIMEOUT_MS,
               preferredDisplayId,
               labelOnly: true,
             }),
@@ -742,7 +706,10 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
             labelEra &&
             labelConfidence >= 0.9 &&
             labelDetection?.candidateId === "filter-label" &&
-            labelEra !== era
+            labelEra !== era &&
+            // Requiem relics open only in a Requiem fissure, so no other tag can sit on a
+            // screen that offers them.
+            labelEra !== "requiem"
           ) {
             log.info(
               `[RelicSelection] filter label overrides mission tag: tag=${era} label=${labelEra}`,
@@ -771,7 +738,7 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
               windows.positionOverlayWindow(windows.getAnchorMeta());
             }
           } catch {
-            // non-critical, detection flow will still run
+            // ignored
           }
         }
       } else if (desktopTierHint) {
@@ -791,22 +758,25 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
 
         if (scanToken !== activeScanToken) return;
 
-        // The first capture after app start can come back empty from a cold
-        // capture/OCR start, so one delayed retry runs before the era filter is
-        // dropped. A rejected self-read lands here too, and the delay gives the
-        // overlay time to clear its stale cards before the second capture.
-        if (detectEra && eraDetection && !normalizeEra(eraDetection.era || null)) {
-          log.info("[RelicSelection] era read empty, retrying once");
+        const emptyRead = Boolean(detectEra && eraDetection && !normalizeEra(eraDetection.era));
+        const retryBudgetMs =
+          ERA_DETECTION_TOTAL_TIMEOUT_MS -
+          (Date.now() - eraDetectStartedAt) -
+          ERA_DETECTION_RETRY_DELAY_MS;
+        if (detectEra && emptyRead && retryBudgetMs >= ERA_DETECTION_MIN_RETRY_MS) {
+          log.info(`[RelicSelection] era read empty, retrying once budget=${retryBudgetMs}ms`);
           await new Promise((resolve) => setTimeout(resolve, ERA_DETECTION_RETRY_DELAY_MS));
           if (scanToken !== activeScanToken) return;
           const retryDetection = rejectSelfRead(
             await detectEra({
-              timeoutMs: ERA_DETECTION_TIMEOUT_MS,
+              timeoutMs: Math.min(ERA_DETECTION_TIMEOUT_MS, retryBudgetMs),
               preferredDisplayId,
             }),
           );
           if (scanToken !== activeScanToken) return;
           if (retryDetection) eraDetection = retryDetection;
+        } else if (emptyRead) {
+          log.info(`[RelicSelection] era read empty, retry budget spent (${retryBudgetMs}ms)`);
         }
 
         if (eraDetection?.sourceDisplayId) {
@@ -825,8 +795,7 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
             `candidate=${String(eraDetection?.candidateId || "-")} preview="${String(eraDetection?.textPreview || "")}"`,
         );
 
-        // Cache a confident detection for the rest of this mission session.
-        if (era && eraConfidence >= 0.9) {
+        if (era && eraConfidence >= 0.9 && eraDetection?.candidateId === "filter-label") {
           activeMissionTier = era;
           activeMissionTierSetAt = Date.now();
           log.info(`[RelicSelection] activeMissionTier set: ${era}`);
@@ -840,6 +809,11 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
 
       const { rows, totalOwnedCount } = buildRecommendations(effectiveEra);
       if (scanToken !== activeScanToken) return;
+
+      if (toFiniteOr(ctx.overlayDismissedUntilMs, 0) > scanDismissBaselineMs) {
+        log.info(`[RelicSelection] refinement dropped, overlay closed token=${scanToken}`);
+        return;
+      }
 
       rememberOverlayRows(rows);
       windows.sendOverlayEvent(RELIC_RECOMMENDATIONS, {
@@ -896,6 +870,7 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
 
     const scanToken = activeScanToken + 1;
     activeScanToken = scanToken;
+    scanDismissBaselineMs = toFiniteOr(ctx.overlayDismissedUntilMs, 0);
 
     if (inFlight) {
       log.info(`[RelicSelection] replacing in-flight planner scan (${source})`);
@@ -926,7 +901,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
       windows.sendOverlayEvent(RELIC_PLANNER_TRIGGER, { source });
       windows.scheduleOverlayAutoHide(OVERLAY_AUTO_HIDE_DETECTING_MAX_MS);
 
-      // Avoid flashing all eras before OCR by sending rows only with a cached era.
       const cachedEra =
         logMissionTier ||
         (activeMissionTier && Date.now() - activeMissionTierSetAt < RELIC_MISSION_TIER_CACHE_TTL_MS
@@ -975,8 +949,7 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
     if (activeMissionTier) {
       log.info(`[RelicSelection] activeMissionTier cleared (menu closed)`);
     }
-    // logMissionTier survives picker closes on purpose: the tag only fires on
-    // mission load, and the era holds for the whole mission.
+    // The EE.log tag only fires on mission load, so logMissionTier outlives a picker close.
     activeMissionTier = null;
     activeMissionTierSetAt = 0;
   }
@@ -997,7 +970,6 @@ export function createRelicSelectionController(options: OverlayRecommendationCon
       log.info(`[RelicSelection] mission tier cleared (non-fissure tag ${tag})`);
       logMissionTier = null;
     }
-    // shared so the reward overlay can shorten its omnia auto-hide
     ctx.activeFissureTier = logMissionTier;
   }
 

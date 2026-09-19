@@ -1,15 +1,17 @@
 import { componentUniqueNameAliases } from "../../config/shared/componentNames.js";
+import { foundryClaimableProducts } from "./inventory/foundryResources.js";
 import { componentParentOf } from "./inventory/partConsumers.js";
 import type { SafetyVerdictLookup } from "./inventory/safetyRules.js";
 import { buildMasteryLookup, inheritedMasteryFacts, normalizeLookupKey } from "./masteryLookup.js";
 import type { MasteryFacts } from "./masteryLookup.js";
-import type { ItemDbEntry, MasteryData } from "../types/inventory.js";
+import type { FoundryData, ItemDbEntry, MasteryData } from "../types/inventory.js";
 
 interface RowLike {
   name: string;
   internalName?: string;
   parentMastered?: boolean;
   parentOwned?: boolean;
+  parentClaimable?: boolean;
   spare?: boolean;
 }
 
@@ -18,23 +20,35 @@ interface PartMasteryFlags {
   /** The build this row feeds is in the inventory now. Left unset on a built
    *  row: there the owned count is the answer. */
   parentOwned?: boolean;
+  /** The build this row feeds is finished in the foundry and unclaimed. Unset
+   *  rather than false, so a row keeps the shape the mastery pass gave it. */
+  parentClaimable?: boolean;
   /** The row is a build component, the only kind the Spares filter is about. */
   component?: true;
 }
 
 type PartMasteryResolver = (row: RowLike) => PartMasteryFlags;
 
-/** What the M and C badges show for a row. */
+/** What the M, C and F badges show for a row. */
 interface ItemMarks {
   mastered: boolean;
   crafted: boolean;
+  foundry: boolean;
 }
+
+const NO_CLAIMABLE_PARENTS: ReadonlySet<string> = new Set();
 
 export function itemMarksFor(flags: {
   parentMastered?: unknown;
   parentOwned?: unknown;
+  parentClaimable?: unknown;
 }): ItemMarks {
-  return { mastered: flags.parentMastered === true, crafted: flags.parentOwned === true };
+  const crafted = flags.parentOwned === true;
+  return {
+    mastered: flags.parentMastered === true,
+    crafted,
+    foundry: !crafted && flags.parentClaimable === true,
+  };
 }
 
 function dbEntryFor(
@@ -55,8 +69,9 @@ function dbEntryFor(
 export function buildPartMasteryResolver(
   itemDb: Record<string, ItemDbEntry>,
   mastery: MasteryData | null,
+  claimableParents: ReadonlySet<string> = NO_CLAIMABLE_PARENTS,
 ): PartMasteryResolver {
-  if ((mastery?.items ?? []).length === 0) return () => ({});
+  if ((mastery?.items ?? []).length === 0 && claimableParents.size === 0) return () => ({});
   const lookup = buildMasteryLookup(mastery);
 
   const nameIndex = new Map<string, string>();
@@ -65,14 +80,28 @@ export function buildPartMasteryResolver(
     if (key && !nameIndex.has(key)) nameIndex.set(key, uniqueName);
   }
 
+  const claimable = (parent: string | undefined): boolean =>
+    parent != null &&
+    componentUniqueNameAliases(parent).some((alias) => claimableParents.has(alias));
+
   // A part and a set row both answer for the build they belong to, so both
   // flags describe that build and never the row itself.
-  const partFlags = (facts: MasteryFacts | undefined): PartMasteryFlags =>
-    facts ? { parentMastered: facts.status === "mastered", parentOwned: facts.owned } : {};
+  const partFlags = (
+    facts: MasteryFacts | undefined,
+    parent: string | undefined,
+  ): PartMasteryFlags => ({
+    ...(facts ? { parentMastered: facts.status === "mastered", parentOwned: facts.owned } : {}),
+    ...(claimable(parent) ? { parentClaimable: true } : {}),
+  });
 
   return (row) => {
     const setBase = /\sSet$/i.test(row.name) ? row.name.replace(/\s+Set$/i, "") : null;
-    if (setBase) return partFlags(inheritedMasteryFacts(lookup, itemDb, null, setBase));
+    if (setBase) {
+      return partFlags(
+        inheritedMasteryFacts(lookup, itemDb, null, setBase),
+        nameIndex.get(normalizeLookupKey(setBase)),
+      );
+    }
 
     const resolved =
       dbEntryFor(itemDb, row.internalName) ??
@@ -80,7 +109,7 @@ export function buildPartMasteryResolver(
     const parent = resolved ? componentParentOf(resolved.uniqueName, itemDb) : null;
     if (parent) {
       return {
-        ...partFlags(inheritedMasteryFacts(lookup, itemDb, parent, itemDb[parent]?.name)),
+        ...partFlags(inheritedMasteryFacts(lookup, itemDb, parent, itemDb[parent]?.name), parent),
         component: true,
       };
     }
@@ -96,7 +125,7 @@ export function buildPartMasteryResolver(
 
 const RESOLVER_CACHE = new WeakMap<
   Record<string, ItemDbEntry>,
-  { mastery: MasteryData | null; resolve: PartMasteryResolver }
+  { mastery: MasteryData | null; foundry: FoundryData | null; resolve: PartMasteryResolver }
 >();
 
 /** For per-row callers: building the resolver indexes the whole item database,
@@ -104,11 +133,16 @@ const RESOLVER_CACHE = new WeakMap<
 export function sharedPartMasteryResolver(
   itemDb: Record<string, ItemDbEntry>,
   mastery: MasteryData | null,
+  foundry: FoundryData | null = null,
 ): PartMasteryResolver {
   const cached = RESOLVER_CACHE.get(itemDb);
-  if (cached && cached.mastery === mastery) return cached.resolve;
-  const resolve = buildPartMasteryResolver(itemDb, mastery);
-  RESOLVER_CACHE.set(itemDb, { mastery, resolve });
+  if (cached && cached.mastery === mastery && cached.foundry === foundry) return cached.resolve;
+  const resolve = buildPartMasteryResolver(
+    itemDb,
+    mastery,
+    foundry ? foundryClaimableProducts(foundry, Date.now()) : NO_CLAIMABLE_PARENTS,
+  );
+  RESOLVER_CACHE.set(itemDb, { mastery, foundry, resolve });
   return resolve;
 }
 
@@ -122,7 +156,13 @@ export function attachPartMasteryFlags<T extends RowLike>(
   return rows.map((row) => {
     const { component, ...flags } = resolve(row);
     const verdict = component && row.internalName ? verdicts?.get(row.internalName) : undefined;
-    if (flags.parentMastered === undefined && verdict === undefined) return row;
+    if (
+      flags.parentMastered === undefined &&
+      flags.parentClaimable === undefined &&
+      verdict === undefined
+    ) {
+      return row;
+    }
     return { ...row, ...flags, ...(verdict ? { spare: verdict.safe > 0 } : {}) };
   });
 }

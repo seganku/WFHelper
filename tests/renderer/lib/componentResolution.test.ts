@@ -165,4 +165,45 @@ describe("enrichComponents", () => {
 
     expect(rows[0]?.owned).toBe(true);
   });
+
+  const BLADE = "/Lotus/Types/Recipes/Weapons/WeaponParts/GhoulsawBlade";
+  const BLADE_DB = {
+    [BLADE]: { name: "Blade", isBuildComponent: true },
+    [`${BLADE}Blueprint`]: { name: "Blade Blueprint", buildsProduct: BLADE },
+  };
+
+  it("does not count a held blueprint as a built part", () => {
+    const rows = enrichComponents(
+      [{ name: "Blade", uniqueName: BLADE, itemCount: 1 }],
+      new Map([[`${BLADE}Blueprint`, 1]]),
+      BLADE_DB,
+    );
+
+    expect(rows[0]?.built).toBe(0);
+    expect(rows[0]?.blueprintHeld).toBe(true);
+    // The readiness rules still see one pile, so their answers do not move.
+    expect(rows[0]?.ownedCount).toBe(1);
+    expect(rows[0]?.owned).toBe(true);
+  });
+
+  it("counts a part that really is built", () => {
+    const rows = enrichComponents(
+      [{ name: "Blade", uniqueName: BLADE, itemCount: 1 }],
+      new Map([[BLADE, 1]]),
+      BLADE_DB,
+    );
+
+    expect(rows[0]?.built).toBe(1);
+    expect(rows[0]?.blueprintHeld).toBe(false);
+  });
+
+  it("leaves the blueprint fields off when no database is passed", () => {
+    const rows = enrichComponents(
+      [{ name: "Blade", uniqueName: BLADE, itemCount: 1 }],
+      new Map([[`${BLADE}Blueprint`, 1]]),
+    );
+
+    expect(rows[0]?.built).toBeUndefined();
+    expect(rows[0]?.blueprintHeld).toBeUndefined();
+  });
 });

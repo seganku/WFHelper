@@ -325,8 +325,8 @@
                         alt=""
                         auditKey={row.name}
                         cls="!h-12 !w-12 shrink-0"
-                      />{/if}
-                    <div class="flex flex-col gap-1">
+                      />{:else}<div class="h-12 w-12 shrink-0"></div>{/if}
+                    <div class="flex flex-col gap-1" data-baro-name>
                       <button
                         type="button"
                         class="border-0 bg-transparent p-0 text-left text-text-primary enabled:cursor-pointer enabled:hover:text-accent"

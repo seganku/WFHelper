@@ -2,15 +2,15 @@ import type { ThemeColors, ThemeEffects, ThemeSettings } from "../../types/theme
 import { THEME_COLOR_CSS_MAP, THEME_EFFECT_CSS_MAP } from "../../types/theme.js";
 import { BASE_FONT_SIZE_PX } from "../../config/themeDefaults.js";
 import { autoAdjustTextColor, WCAG_AA_NORMAL } from "./contrastUtils.js";
+import { OVERLAY_LAYOUT_KINDS } from "../../../config/shared/overlayLayout.js";
+import { overlayOpacityCssVar } from "../../../config/shared/themeCssVars.js";
 
-/** Apply ThemeSettings to the document as CSS custom properties. */
 export function applyTheme(settings: ThemeSettings): void {
   if (typeof document === "undefined") return;
 
   const root = document.documentElement;
   const colors = resolveColors(settings);
 
-  // Apply all colour tokens
   for (const [key, cssVar] of Object.entries(THEME_COLOR_CSS_MAP)) {
     const value = colors[key as keyof ThemeColors];
     if (value) {
@@ -18,17 +18,14 @@ export function applyTheme(settings: ThemeSettings): void {
     }
   }
 
-  // Also set the computed accent glow (used in several places)
   const accent = colors.accent;
   root.style.setProperty("--accent-glow", accentGlowColor(accent));
 
   applyEffectTokens(root, settings.effects);
 
-  // Font scale
   const scale = settings.fontSizes.globalScale;
   root.style.setProperty("--font-global-size", `${BASE_FONT_SIZE_PX * scale}px`);
 
-  // Per-category font size overrides
   if (settings.fontSizes.headingSize != null) {
     root.style.setProperty("--font-heading-size", `${settings.fontSizes.headingSize}rem`);
   } else {
@@ -60,6 +57,14 @@ function applyEffectTokens(root: HTMLElement, effects: ThemeEffects): void {
   root.style.setProperty(THEME_EFFECT_CSS_MAP.controlBorder, surface.controlBorder);
   root.style.setProperty(THEME_EFFECT_CSS_MAP.backdropBlur, surface.backdropBlur);
   root.style.setProperty(THEME_EFFECT_CSS_MAP.modalBg, surface.modalBg);
+  root.style.setProperty(
+    THEME_EFFECT_CSS_MAP.overlayOpacity,
+    `${Math.round(effects.overlayOpacity * 100)}%`,
+  );
+  for (const kind of OVERLAY_LAYOUT_KINDS) {
+    const opacity = effects.overlayOpacityOverrides?.[kind] ?? effects.overlayOpacity;
+    root.style.setProperty(overlayOpacityCssVar(kind), `${Math.round(opacity * 100)}%`);
+  }
 }
 
 function resolveRadii(
@@ -132,7 +137,6 @@ function resolveSurfaceTokens(effects: ThemeEffects): {
       controlBg: "color-mix(in srgb, var(--bg-raised) 72%, transparent)",
       controlBorder: "color-mix(in srgb, var(--border) 90%, transparent)",
       backdropBlur: `blur(${effects.glassBlurPx}px)`,
-      // modals float over dimmed content, so keep them mostly opaque for readability
       modalBg: "color-mix(in srgb, var(--bg-surface) 82%, transparent)",
     };
   }
@@ -148,26 +152,22 @@ function resolveSurfaceTokens(effects: ThemeEffects): {
   };
 }
 
-/** Lift the text tokens until they clear WCAG against their own background. */
 export function contrastSafeColors(source: ThemeColors): ThemeColors {
   const colors = { ...source };
   const bg = colors.bgBase;
   colors.textPrimary = autoAdjustTextColor(colors.textPrimary, bg, WCAG_AA_NORMAL);
   colors.textSecondary = autoAdjustTextColor(colors.textSecondary, bg, WCAG_AA_NORMAL);
   colors.textMuted = autoAdjustTextColor(colors.textMuted, bg, 3.0);
-  // Heading and body default to textPrimary, so they need the same lift.
   colors.textHeading = autoAdjustTextColor(colors.textHeading, bg, WCAG_AA_NORMAL);
   colors.textBody = autoAdjustTextColor(colors.textBody, bg, WCAG_AA_NORMAL);
   return colors;
 }
 
-/** Resolve colours with contrast-safe adjustments when enabled. */
 function resolveColors(settings: ThemeSettings): ThemeColors {
   if (settings.contrastSafeMode) return contrastSafeColors(settings.colors);
   return { ...settings.colors };
 }
 
-/** Accent-glow rgba() from a hex colour; default glow on parse failure. */
 export function accentGlowColor(hex: string): string {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   if (!match) return "rgba(212, 168, 67, 0.15)";

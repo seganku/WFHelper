@@ -42,13 +42,13 @@ describe("reward overlay saved layouts", () => {
   it("bounds numeric values and drops malformed styles", () => {
     expect(
       normalizeRewardFieldStyle({
-        x: -10_000,
-        y: 10_000,
+        x: -1e9,
+        y: 1e9,
         scale: 100,
         color: "url(https://example.invalid/image)",
         hidden: "true",
       }),
-    ).toEqual({ x: -980, y: 236, scale: 3, color: null, hidden: false });
+    ).toEqual({ x: -10_000, y: 10_000, scale: 3, color: null, hidden: false });
     expect(normalizeRewardFieldStyle({ x: NaN, y: Infinity, scale: "2" })).toEqual(
       DEFAULT_REWARD_FIELD_STYLE,
     );

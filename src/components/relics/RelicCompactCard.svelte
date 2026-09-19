@@ -10,7 +10,7 @@
     RELIC_QUALITY_SHORT_KEY,
   } from "../../lib/relic.js";
   import { itemMarksFor, sharedPartMasteryResolver } from "../../lib/parentMastery.js";
-  import { itemDb } from "../../stores/data.js";
+  import { itemDb, foundryData } from "../../stores/data.js";
   import { masteryData } from "../../stores/mastery.js";
   import { tr, type MessageKey } from "../../lib/i18n.js";
   import type { RelicGroup, RelicQuality, RelicReward } from "../../types/relics.js";
@@ -56,7 +56,7 @@
     radiant: $tr(RELIC_QUALITY_SHORT_KEY.radiant),
   };
 
-  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData);
+  $: partMastery = sharedPartMasteryResolver($itemDb, $masteryData, $foundryData);
   // Keep $tr in this reactive statement so tooltip marks follow language changes.
   $: rewardTitles = rewardIcons.map((reward) => {
     const marks = itemMarksFor(partMastery({ name: reward.name }));

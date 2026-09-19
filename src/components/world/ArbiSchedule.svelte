@@ -54,20 +54,27 @@
   const nowClock = clockStore(1000);
   $: nowMs = $nowClock;
 
-  // The sidebar starts below the view header, so a pure 100vh calc either
-  // overflows the fold (unscrolled) or leaves a gap (stuck). Measure instead.
   let asideEl: HTMLElement | null = null;
+  let splitEl: HTMLElement | null = null;
+
+  let stacked = true;
+  let statusbarPx = 0;
+
+  function syncSplit(): void {
+    if (!splitEl) return;
+    const tracks = getComputedStyle(splitEl).gridTemplateColumns.split(/\s+/);
+    stacked = tracks.filter((track) => track.endsWith("px")).length < 2;
+    statusbarPx = document.querySelector("[data-status-bar]")?.getBoundingClientRect().height ?? 0;
+    updateAsideHeight();
+  }
+
   function updateAsideHeight(): void {
     if (!asideEl) return;
-    if (window.innerWidth <= 1000) {
+    if (stacked) {
       asideEl.style.height = "";
       return;
     }
-    const statusbar =
-      parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue("--statusbar-height"),
-      ) || 0;
-    const available = window.innerHeight - asideEl.getBoundingClientRect().top - statusbar - 12;
+    const available = window.innerHeight - asideEl.getBoundingClientRect().top - statusbarPx - 12;
     asideEl.style.height = `${Math.max(280, available)}px`;
   }
 
@@ -90,14 +97,23 @@
 
   onMount(() => {
     void refresh();
-    updateAsideHeight();
-    window.addEventListener("resize", updateAsideHeight);
+    syncSplit();
+    let observedWidth = -1;
+    const splitResize = new ResizeObserver((records) => {
+      const width = records[0]?.contentRect.width ?? -1;
+      if (width === observedWidth) return;
+      observedWidth = width;
+      syncSplit();
+    });
+    if (splitEl) splitResize.observe(splitEl);
+    window.addEventListener("resize", syncSplit);
     window.addEventListener("scroll", updateAsideHeight, true);
     return () => {
       destroyed = true;
       if (copyStateTimer) clearTimeout(copyStateTimer);
       activeCopyStage?.remove();
-      window.removeEventListener("resize", updateAsideHeight);
+      splitResize.disconnect();
+      window.removeEventListener("resize", syncSplit);
       window.removeEventListener("scroll", updateAsideHeight, true);
     };
   });
@@ -318,330 +334,345 @@
   }
 </script>
 
-<div
-  class="grid grid-cols-[270px_minmax(0,1fr)] gap-5 max-[1000px]:grid-cols-1"
-  data-tour="arbi-schedule"
->
-  <!-- NODE SIDEBAR -->
-  <aside
-    data-tour="arbi-filters"
-    bind:this={asideEl}
-    class="sticky top-0 flex min-w-0 flex-col gap-2 self-start max-[1000px]:static max-[1000px]:!h-auto"
+<div class="@container">
+  <div
+    class="grid grid-cols-1 gap-5 @4xl:grid-cols-[18rem_minmax(0,1fr)]"
+    data-tour="arbi-schedule"
+    bind:this={splitEl}
   >
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
-        >{$tr("arbisched.nodes")}</span
-      >
-      <span class="text-xs text-text-muted">
-        {selected.size > 0
-          ? $tr("arbisched.nodeCountSelected", {
-              active: String([...selected].filter((id) => catalog.some((n) => n.id === id)).length),
-              total: String(catalog.length),
-            })
-          : $tr("arbisched.nodeCount", { total: String(catalog.length) })}
-      </span>
-    </div>
-
-    <input
-      type="text"
-      class="w-full rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1.5 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-accent/60"
-      placeholder={$tr("arbisched.searchPlaceholder")}
-      bind:value={searchRaw}
-      data-search-focus
-    />
-    {#if unmatchedTokens}
-      <span class="text-xs text-warning"
-        >{$tr("arbisched.noNodeMatch", { tokens: unmatchedTokens })}</span
-      >
-    {/if}
-
-    <div
-      class="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-[var(--radius-md)] border border-border/60 max-[1000px]:max-h-[420px] max-[1000px]:flex-none"
+    <aside
+      data-tour="arbi-filters"
+      bind:this={asideEl}
+      class="flex min-w-0 flex-col gap-2 self-start @4xl:sticky @4xl:top-0"
     >
-      {#each sidebarNodes as node (node.id)}
-        {@const active = selected.has(node.id)}
-        {@const starred = favoriteSet.has(node.id)}
-        <div
-          class="flex w-full cursor-pointer items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left last:border-b-0 hover:bg-surface-hover {active
-            ? 'bg-accent/10'
-            : ''}"
-          role="button"
-          tabindex="0"
-          on:click={() => toggleNode(node.id)}
-          on:keydown={(e) => (e.key === "Enter" || e.key === " ") && toggleNode(node.id)}
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
+          >{$tr("arbisched.nodes")}</span
         >
-          <span
-            class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border {active
-              ? 'border-accent bg-accent text-bg-deep'
-              : 'border-border'}"
+        <span class="text-xs text-text-muted">
+          {selected.size > 0
+            ? $tr("arbisched.nodeCountSelected", {
+                active: String(
+                  [...selected].filter((id) => catalog.some((n) => n.id === id)).length,
+                ),
+                total: String(catalog.length),
+              })
+            : $tr("arbisched.nodeCount", { total: String(catalog.length) })}
+        </span>
+      </div>
+
+      <input
+        type="text"
+        class="w-full rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1.5 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-accent/60"
+        placeholder={$tr("arbisched.searchPlaceholder")}
+        bind:value={searchRaw}
+        data-search-focus
+      />
+      {#if unmatchedTokens}
+        <span class="text-xs text-warning"
+          >{$tr("arbisched.noNodeMatch", { tokens: unmatchedTokens })}</span
+        >
+      {/if}
+
+      <div
+        class="flex max-h-[420px] min-h-0 flex-none flex-col overflow-y-auto rounded-[var(--radius-md)] border border-border/60 @4xl:max-h-none @4xl:min-h-[12rem] @4xl:flex-1"
+        data-arbi-node-list
+      >
+        {#each sidebarNodes as node (node.id)}
+          {@const active = selected.has(node.id)}
+          {@const starred = favoriteSet.has(node.id)}
+          <div
+            class="flex w-full cursor-pointer items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left last:border-b-0 hover:bg-surface-hover {active
+              ? 'bg-accent/10'
+              : ''}"
+            role="button"
+            tabindex="0"
+            data-arbi-node={node.id}
+            on:click={() => toggleNode(node.id)}
+            on:keydown={(e) => (e.key === "Enter" || e.key === " ") && toggleNode(node.id)}
           >
-            {#if active}
+            <span
+              class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border {active
+                ? 'border-accent bg-accent text-bg-deep'
+                : 'border-border'}"
+            >
+              {#if active}
+                <svg
+                  class="h-2.5 w-2.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"><path d="m5 13 4 4L19 7" /></svg
+                >
+              {/if}
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm text-text-primary">{node.node}</span>
+              <span class="block truncate text-[11px] text-text-muted">{node.mission}</span>
+            </span>
+            <span
+              class="arbisched-dot arbisched-dot-{factionBadgeKey(node.faction)}"
+              title={node.faction}
+            ></span>
+            <button
+              class="shrink-0 cursor-pointer border-0 bg-transparent p-0.5 {starred
+                ? 'text-warning'
+                : 'text-text-muted/50 hover:text-text-secondary'}"
+              title={$tr("arbisched.starTitle")}
+              on:click|stopPropagation={() => toggleStar(node.id)}
+            >
               <svg
-                class="h-2.5 w-2.5"
+                class="h-3.5 w-3.5"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                stroke-width="4"
+                stroke-width={starred ? 2.5 : 2}
                 stroke-linecap="round"
-                stroke-linejoin="round"><path d="m5 13 4 4L19 7" /></svg
+                stroke-linejoin="round"
+                ><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path
+                  d="m22 6-3-3"
+                /></svg
               >
-            {/if}
-          </span>
-          <span class="min-w-0 flex-1">
-            <span class="block truncate text-sm text-text-primary">{node.node}</span>
-            <span class="block truncate text-[11px] text-text-muted">{node.mission}</span>
-          </span>
-          <span
-            class="arbisched-dot arbisched-dot-{factionBadgeKey(node.faction)}"
-            title={node.faction}
-          ></span>
-          <button
-            class="shrink-0 cursor-pointer border-0 bg-transparent p-0.5 {starred
-              ? 'text-warning'
-              : 'text-text-muted/50 hover:text-text-secondary'}"
-            title={$tr("arbisched.starTitle")}
-            on:click|stopPropagation={() => toggleStar(node.id)}
-          >
-            <svg
-              class="h-3.5 w-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width={starred ? 2.5 : 2}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              ><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path
-                d="m22 6-3-3"
-              /></svg
-            >
-          </button>
-        </div>
-      {:else}
-        <span class="px-2 py-3 text-center text-sm text-text-muted">{$tr("arbisched.noNodes")}</span
-        >
-      {/each}
-    </div>
-
-    <div class="flex gap-2">
-      <button class="btn-secondary btn-sm flex-1" on:click={selectAll}>{$tr("common.all")}</button>
-      <button class="btn-secondary btn-sm flex-1" on:click={selectNone}>{$tr("common.none")}</button
-      >
-    </div>
-
-    <div class="mt-1 flex flex-col gap-1.5 rounded-[var(--radius-md)] border border-border/60 p-2">
-      <span class="text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
-        >{$tr("arbisched.presets")}</span
-      >
-      <select
-        class="w-full rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none"
-        bind:value={presetSelected}
-      >
-        <option value="">{$tr("arbisched.presetSelect")}</option>
-        {#each presets as preset (preset.name)}
-          <option value={preset.name}>{preset.name}</option>
-        {/each}
-      </select>
-      <div class="flex gap-1.5">
-        <button
-          class="btn-secondary btn-sm flex-1"
-          disabled={presets.length === 0}
-          on:click={loadPreset}>{$tr("arbisched.presetLoad")}</button
-        >
-        <button
-          class="btn-secondary btn-sm flex-1"
-          disabled={presets.length === 0}
-          on:click={deletePreset}>{$tr("common.delete")}</button
-        >
-      </div>
-      <div class="flex gap-1.5">
-        <input
-          type="text"
-          class="min-w-0 flex-1 rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none placeholder:text-text-muted"
-          placeholder={$tr("arbisched.presetName")}
-          bind:value={presetName}
-          on:keydown={(e) => e.key === "Enter" && savePreset()}
-        />
-        <button class="btn-secondary btn-sm" on:click={savePreset}>{$tr("common.save")}</button>
-      </div>
-      {#if presetStatus}
-        <span class="text-xs text-text-muted">{presetStatus}</span>
-      {/if}
-    </div>
-  </aside>
-
-  <!-- SCHEDULE TABLE -->
-  <div class="flex min-w-0 flex-col gap-2">
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-      <select
-        class="rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none"
-        value={String(daysToShow)}
-        on:change={onDaysChange}
-      >
-        {#each DAY_OPTIONS as days}
-          <option value={String(days)}>{$tr("arbisched.days", { n: String(days) })}</option>
-        {/each}
-      </select>
-      <span class="text-xs text-text-muted"
-        >{$tr("arbisched.entries", { count: String(visibleEntries.length) })}</span
-      >
-      {#if updatedAgo}
-        <span class="text-xs text-text-muted">{$tr("arbisched.updated", { ago: updatedAgo })}</span>
-      {/if}
-      <button
-        class="btn-secondary btn-sm ml-auto"
-        disabled={selectedCopyEntries.length === 0 || copyState === "busy"}
-        title={$tr("arbisched.copySelectedTitle")}
-        on:click={copySelectedRows}
-      >
-        {copyState === "done"
-          ? $tr("common.copied")
-          : copyState === "error"
-            ? $tr("common.copyFailed")
-            : copyState === "max"
-              ? $tr("arbisched.copyMax", { max: String(MAX_COPY_ROWS) })
-              : $tr("arbisched.copySelected", { n: String(selectedCopyEntries.length) })}
-      </button>
-      <span class="flex items-center gap-1.5 text-xs text-text-secondary">
-        <svg
-          class="h-3.5 w-3.5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          ><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path
-            d="M10.3 21a1.94 1.94 0 0 0 3.4 0"
-          /></svg
-        >
-        {$tr("arbisched.leadLabel")}
-        <input
-          type="number"
-          class="arbisched-lead-input w-12 rounded-[var(--radius-md)] border border-border bg-surface-input px-1 py-0.5 text-center text-xs text-text-primary outline-none"
-          min="1"
-          max="120"
-          value={alerts.minutesBefore}
-          on:change={onLeadChange}
-        />
-        {$tr("arbisched.leadSuffix")}
-      </span>
-    </div>
-
-    {#if !loaded}
-      <div class="empty-state"><p>{$tr("arbisched.loading")}</p></div>
-    {:else if loadFailed && visibleEntries.length === 0}
-      <div class="empty-state"><p>{$tr("arbisched.unavailable")}</p></div>
-    {:else if visibleEntries.length === 0}
-      <div class="empty-state"><p>{$tr("arbisched.empty")}</p></div>
-    {:else}
-      <!-- Fixed columns total ~430px; scroll the table itself, never the page. -->
-      <div class="overflow-x-auto">
-        <div class="flex min-w-[560px] flex-col">
-          <div
-            class="grid grid-cols-[90px_minmax(0,1.3fr)_minmax(0,1fr)_110px_130px_36px_28px] gap-x-3 border-b border-border px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
-          >
-            <span>{$tr("foundry.sort.time")}</span>
-            <span>{$tr("common.node")}</span>
-            <span>{$tr("common.mission")}</span>
-            <span>{$tr("arbisched.col.faction")}</span>
-            <span class="text-right">{$tr("arbisched.col.startsIn")}</span>
-            <span></span>
-            <span></span>
+            </button>
           </div>
-          {#each dayGroups as group (group.dayKey)}
-            <div
-              class="border-b border-border/60 bg-surface-hover px-2 py-1 text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
-            >
-              {group.dayLabel}
-            </div>
-            {#each group.entries as entry (`${entry.epochMs}:${entry.nodeId}`)}
-              {@const countdown = formatScheduleCountdown(entry.epochMs, nowMs)}
-              {@const key = scheduleEntryKey(entry)}
-              {@const belled = occurrenceSet.has(key)}
-              <div
-                class="grid grid-cols-[90px_minmax(0,1.3fr)_minmax(0,1fr)_110px_130px_36px_28px] items-center gap-x-3 border-b border-border/40 px-2 py-1.5 text-sm hover:bg-surface-hover {copySelection.has(
-                  key,
-                )
-                  ? 'bg-accent/5'
-                  : ''}"
-              >
-                <span class="font-display tracking-[0.02em] whitespace-nowrap text-text-secondary"
-                  >{formatEntryTime(entry.epochMs, $locale)}</span
-                >
-                <span class="truncate font-semibold text-text-primary">
-                  {entry.node}
-                  {#if favoriteSet.has(entry.nodeId)}
-                    <span
-                      class="ml-1 inline-flex align-[-2px] text-warning"
-                      title={$tr("arbisched.starTitle")}
-                    >
-                      <svg
-                        class="h-3 w-3"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        ><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path
-                          d="M5 3 2 6"
-                        /><path d="m22 6-3-3" /></svg
-                      >
-                    </span>
-                  {/if}
-                </span>
-                <span class="truncate text-text-secondary">{entry.mission}</span>
-                <span>
-                  <span class="arbisched-badge arbisched-badge-{factionBadgeKey(entry.faction)}"
-                    >{entry.faction}</span
-                  >
-                </span>
-                <span
-                  class="text-right font-display text-sm tracking-[0.02em] whitespace-nowrap {countdown ===
-                  'NOW'
-                    ? 'text-success font-bold'
-                    : 'text-text-primary'}">{countdown}</span
-                >
-                <span class="text-right">
-                  {#if countdown !== "NOW"}
-                    <button
-                      data-tour="arbi-bell"
-                      class="cursor-pointer rounded border border-transparent bg-transparent p-1 transition-colors duration-100 {belled
-                        ? 'text-accent'
-                        : 'text-text-muted/50 hover:border-border hover:text-text-secondary'}"
-                      title={$tr("arbisched.bellTitle")}
-                      on:click={() => toggleBell(entry)}
-                    >
-                      <svg
-                        class="h-3.5 w-3.5"
-                        viewBox="0 0 24 24"
-                        fill={belled ? "currentColor" : "none"}
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        ><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path
-                          d="M10.3 21a1.94 1.94 0 0 0 3.4 0"
-                        /></svg
-                      >
-                    </button>
-                  {/if}
-                </span>
-                <span class="flex justify-center">
-                  <input
-                    type="checkbox"
-                    checked={copySelection.has(key)}
-                    aria-label={$tr("arbisched.copyRowLabel", { node: entry.node })}
-                    title={$tr("arbisched.copyRowLabel", { node: entry.node })}
-                    on:change={() => toggleCopyRow(entry)}
-                  />
-                </span>
-              </div>
-            {/each}
-          {/each}
-        </div>
+        {:else}
+          <span class="px-2 py-3 text-center text-sm text-text-muted"
+            >{$tr("arbisched.noNodes")}</span
+          >
+        {/each}
       </div>
-    {/if}
+
+      <div class="flex gap-2">
+        <button class="btn-secondary btn-sm flex-1" on:click={selectAll}>{$tr("common.all")}</button
+        >
+        <button class="btn-secondary btn-sm flex-1" on:click={selectNone}
+          >{$tr("common.none")}</button
+        >
+      </div>
+
+      <div
+        class="mt-1 flex flex-col gap-1.5 rounded-[var(--radius-md)] border border-border/60 p-2"
+      >
+        <span class="text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
+          >{$tr("arbisched.presets")}</span
+        >
+        <select
+          class="w-full rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none"
+          bind:value={presetSelected}
+        >
+          <option value="">{$tr("arbisched.presetSelect")}</option>
+          {#each presets as preset (preset.name)}
+            <option value={preset.name}>{preset.name}</option>
+          {/each}
+        </select>
+        <div class="flex gap-1.5">
+          <button
+            class="btn-secondary btn-sm flex-1"
+            disabled={presets.length === 0}
+            on:click={loadPreset}>{$tr("arbisched.presetLoad")}</button
+          >
+          <button
+            class="btn-secondary btn-sm flex-1"
+            disabled={presets.length === 0}
+            on:click={deletePreset}>{$tr("common.delete")}</button
+          >
+        </div>
+        <div class="flex gap-1.5">
+          <input
+            type="text"
+            class="min-w-0 flex-1 rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none placeholder:text-text-muted"
+            placeholder={$tr("arbisched.presetName")}
+            bind:value={presetName}
+            on:keydown={(e) => e.key === "Enter" && savePreset()}
+          />
+          <button class="btn-secondary btn-sm" on:click={savePreset}>{$tr("common.save")}</button>
+        </div>
+        {#if presetStatus}
+          <span class="text-xs text-text-muted">{presetStatus}</span>
+        {/if}
+      </div>
+    </aside>
+
+    <div class="flex min-w-0 flex-col gap-2">
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <select
+          class="rounded-[var(--radius-md)] border border-border bg-surface-input px-2 py-1 text-sm text-text-primary outline-none"
+          value={String(daysToShow)}
+          on:change={onDaysChange}
+        >
+          {#each DAY_OPTIONS as days}
+            <option value={String(days)}>{$tr("arbisched.days", { n: String(days) })}</option>
+          {/each}
+        </select>
+        <span class="text-xs text-text-muted"
+          >{$tr("arbisched.entries", { count: String(visibleEntries.length) })}</span
+        >
+        {#if updatedAgo}
+          <span class="text-xs text-text-muted"
+            >{$tr("arbisched.updated", { ago: updatedAgo })}</span
+          >
+        {/if}
+        <button
+          class="btn-secondary btn-sm ml-auto"
+          disabled={selectedCopyEntries.length === 0 || copyState === "busy"}
+          title={$tr("arbisched.copySelectedTitle")}
+          on:click={copySelectedRows}
+        >
+          {copyState === "done"
+            ? $tr("common.copied")
+            : copyState === "error"
+              ? $tr("common.copyFailed")
+              : copyState === "max"
+                ? $tr("arbisched.copyMax", { max: String(MAX_COPY_ROWS) })
+                : $tr("arbisched.copySelected", { n: String(selectedCopyEntries.length) })}
+        </button>
+        <span class="flex items-center gap-1.5 text-xs text-text-secondary">
+          <svg
+            class="h-3.5 w-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            ><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path
+              d="M10.3 21a1.94 1.94 0 0 0 3.4 0"
+            /></svg
+          >
+          {$tr("arbisched.leadLabel")}
+          <input
+            type="number"
+            class="arbisched-lead-input w-12 rounded-[var(--radius-md)] border border-border bg-surface-input px-1 py-0.5 text-center text-xs text-text-primary outline-none"
+            min="1"
+            max="120"
+            value={alerts.minutesBefore}
+            on:change={onLeadChange}
+          />
+          {$tr("arbisched.leadSuffix")}
+        </span>
+      </div>
+
+      {#if !loaded}
+        <div class="empty-state"><p>{$tr("arbisched.loading")}</p></div>
+      {:else if loadFailed && visibleEntries.length === 0}
+        <div class="empty-state"><p>{$tr("arbisched.unavailable")}</p></div>
+      {:else if visibleEntries.length === 0}
+        <div class="empty-state"><p>{$tr("arbisched.empty")}</p></div>
+      {:else}
+        <div class="overflow-x-auto" data-arbi-table>
+          <div class="flex flex-col">
+            <div
+              class="grid grid-cols-[6rem_minmax(4.5rem,1.3fr)_minmax(3.75rem,1fr)_7.3333rem_8.6667rem_2.4rem_1.8667rem] gap-x-3 border-b border-border px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
+              data-arbi-head
+            >
+              <span class="truncate">{$tr("foundry.sort.time")}</span>
+              <span class="truncate">{$tr("common.node")}</span>
+              <span class="truncate">{$tr("common.mission")}</span>
+              <span class="truncate">{$tr("arbisched.col.faction")}</span>
+              <span class="truncate text-right">{$tr("arbisched.col.startsIn")}</span>
+              <span></span>
+              <span></span>
+            </div>
+            {#each dayGroups as group (group.dayKey)}
+              <div
+                class="border-b border-border/60 bg-surface-hover px-2 py-1 text-xs font-bold uppercase tracking-[0.06em] text-text-secondary"
+              >
+                {group.dayLabel}
+              </div>
+              {#each group.entries as entry (`${entry.epochMs}:${entry.nodeId}`)}
+                {@const countdown = formatScheduleCountdown(entry.epochMs, nowMs)}
+                {@const key = scheduleEntryKey(entry)}
+                {@const belled = occurrenceSet.has(key)}
+                <div
+                  class="grid grid-cols-[6rem_minmax(4.5rem,1.3fr)_minmax(3.75rem,1fr)_7.3333rem_8.6667rem_2.4rem_1.8667rem] items-center gap-x-3 border-b border-border/40 px-2 py-1.5 text-sm hover:bg-surface-hover {copySelection.has(
+                    key,
+                  )
+                    ? 'bg-accent/5'
+                    : ''}"
+                  data-arbi-row
+                >
+                  <span class="font-display tracking-[0.02em] whitespace-nowrap text-text-secondary"
+                    >{formatEntryTime(entry.epochMs, $locale)}</span
+                  >
+                  <span class="truncate font-semibold text-text-primary" data-arbi-cell="node">
+                    {entry.node}
+                    {#if favoriteSet.has(entry.nodeId)}
+                      <span
+                        class="ml-1 inline-flex align-[-2px] text-warning"
+                        title={$tr("arbisched.starTitle")}
+                      >
+                        <svg
+                          class="h-3 w-3"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          ><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path
+                            d="M5 3 2 6"
+                          /><path d="m22 6-3-3" /></svg
+                        >
+                      </span>
+                    {/if}
+                  </span>
+                  <span class="truncate text-text-secondary" data-arbi-cell="mission"
+                    >{entry.mission}</span
+                  >
+                  <span>
+                    <span class="arbisched-badge arbisched-badge-{factionBadgeKey(entry.faction)}"
+                      >{entry.faction}</span
+                    >
+                  </span>
+                  <span
+                    class="text-right font-display text-sm tracking-[0.02em] whitespace-nowrap {countdown ===
+                    'NOW'
+                      ? 'text-success font-bold'
+                      : 'text-text-primary'}">{countdown}</span
+                  >
+                  <span class="text-right">
+                    {#if countdown !== "NOW"}
+                      <button
+                        data-tour="arbi-bell"
+                        class="cursor-pointer rounded border border-transparent bg-transparent p-1 transition-colors duration-100 {belled
+                          ? 'text-accent'
+                          : 'text-text-muted/50 hover:border-border hover:text-text-secondary'}"
+                        title={$tr("arbisched.bellTitle")}
+                        on:click={() => toggleBell(entry)}
+                      >
+                        <svg
+                          class="h-3.5 w-3.5"
+                          viewBox="0 0 24 24"
+                          fill={belled ? "currentColor" : "none"}
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          ><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path
+                            d="M10.3 21a1.94 1.94 0 0 0 3.4 0"
+                          /></svg
+                        >
+                      </button>
+                    {/if}
+                  </span>
+                  <span class="flex justify-center">
+                    <input
+                      type="checkbox"
+                      checked={copySelection.has(key)}
+                      aria-label={$tr("arbisched.copyRowLabel", { node: entry.node })}
+                      title={$tr("arbisched.copyRowLabel", { node: entry.node })}
+                      on:change={() => toggleCopyRow(entry)}
+                    />
+                  </span>
+                </div>
+              {/each}
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 

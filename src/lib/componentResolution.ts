@@ -3,6 +3,7 @@ import {
   ownedComponentCount,
 } from "../../config/shared/componentNames.js";
 import { mergeDuplicateIngredients } from "../../config/shared/recipeRows.js";
+import { buildPartState, builtPartCount } from "./craftingTree.js";
 import type { ComponentInfo, ItemDbEntry, ParsedItem } from "../types/inventory.js";
 import type { WfmItemsLookup } from "../types/ipc.js";
 
@@ -26,27 +27,47 @@ export function buildItemNameIndex(itemDb: Record<string, ItemDbEntry>): Map<str
   return map;
 }
 
-function withOwnership(comp: ComponentInfo, ownership: Map<string, number>): ComponentInfo {
+function withOwnership(
+  comp: ComponentInfo,
+  ownership: Map<string, number>,
+  itemDb: Record<string, ItemDbEntry> | null,
+  root: string | undefined,
+): ComponentInfo {
+  // `ownedCount` stays the folded pile every readiness rule counts on; `built`
+  // is the display figure, which a held blueprint must not inflate.
   const count = ownedComponentCount(comp.uniqueName, ownership);
-  return { ...comp, ownedCount: count, owned: count >= (comp.itemCount || 1) };
+  const enriched: ComponentInfo = {
+    ...comp,
+    ownedCount: count,
+    owned: count >= (comp.itemCount || 1),
+  };
+  if (!itemDb || !comp.uniqueName) return enriched;
+  const part = { uniqueName: comp.uniqueName, count: comp.itemCount || 1 };
+  enriched.built = builtPartCount(part, ownership, itemDb);
+  enriched.blueprintHeld = buildPartState(part, ownership, itemDb, root) === "blueprint";
+  return enriched;
 }
 
-/** Raw db components with ownership counts; doubled rows merge first. */
+/** Raw db components with ownership counts; doubled rows merge first. An item
+ *  database also separates a part that is built from one you hold a blueprint for. */
 export function enrichComponents(
   components: ComponentInfo[],
   ownership: Map<string, number>,
+  itemDb: Record<string, ItemDbEntry> | null = null,
+  root?: string,
 ): ComponentInfo[] {
   return mergeDuplicateIngredients(
     components,
     (comp) => comp.itemCount,
     (comp, itemCount) => ({ ...comp, itemCount }),
-  ).map((comp) => withOwnership(comp, ownership));
+  ).map((comp) => withOwnership(comp, ownership, itemDb, root));
 }
 
 function fallbackComponent(
   uniqueName: string,
   db: ItemDbEntry,
   ownership: Map<string, number>,
+  itemDb: Record<string, ItemDbEntry>,
 ): ComponentInfo {
   return withOwnership(
     {
@@ -57,6 +78,8 @@ function fallbackComponent(
       drops: db.drops || [],
     },
     ownership,
+    itemDb,
+    undefined,
   );
 }
 
@@ -70,7 +93,7 @@ export function resolveComponentByUniqueName(
 
   if (db.isBuildComponent && db.componentOf) {
     const parent = itemDb[db.componentOf];
-    const enriched = enrichComponents(parent?.components || [], ownership);
+    const enriched = enrichComponents(parent?.components || [], ownership, itemDb, db.componentOf);
     const aliases = componentUniqueNameAliases(uniqueName);
     const parentComp = enriched.find((comp) =>
       Boolean(comp.uniqueName && aliases.includes(comp.uniqueName)),
@@ -80,7 +103,7 @@ export function resolveComponentByUniqueName(
     }
   }
 
-  return { comp: fallbackComponent(uniqueName, db, ownership), parentName: "" };
+  return { comp: fallbackComponent(uniqueName, db, ownership, itemDb), parentName: "" };
 }
 
 export function resolveComponentByName(

@@ -2,18 +2,21 @@
   import { PLATINUM_ICON_URL, RIVEN_TEMPLATE_URL } from "../../lib/assetUrls.js";
   import { attributeKeyword } from "../../lib/marketContract.js";
   import { listingWarning, type ListingInventoryMatch } from "../../lib/marketListing.js";
+  import { attrGradeColor, gradeColor } from "../../lib/rivenGradeColors.js";
+  import { RIVEN_ATTR_GRADE_KEYS } from "../../lib/rivenLabels.js";
   import MarketRowBase from "./MarketRowBase.svelte";
   import RivenPolarityIcon from "../RivenPolarityIcon.svelte";
   import { tr, type MessageKey } from "../../lib/i18n.js";
+  import type { RivenContractGrade } from "../../types/ipc.js";
   import type { WfmContract, WfmContractAttribute } from "../../types/market.js";
 
   export let contract: WfmContract;
   export let compact = false;
+  export let grade: RivenContractGrade | null | undefined = undefined;
   export let onEdit: (contract: WfmContract) => void;
   export let onOpen: (contract: WfmContract) => void;
   export let onRemove: (contract: WfmContract) => void;
   export let onToggleVisible: (contract: WfmContract) => void;
-  /** Null while the riven list has not loaded; nothing is flagged until it has. */
   export let inventoryMatch: ListingInventoryMatch | null = null;
   export let busy = false;
 
@@ -44,7 +47,37 @@
     ...(contract.modRank != null ? [`R${contract.modRank}`] : []),
     ...(contract.rerolls != null ? [`RR${contract.rerolls}`] : []),
   ];
+  $: attrGrade = grade === undefined ? "" : (grade?.attributeGrade ?? "?");
+  $: attrGradeKey = RIVEN_ATTR_GRADE_KEYS[attrGrade];
 </script>
+
+{#snippet gradeBadges()}
+  {#if grade !== undefined}
+    <span class="flex shrink-0 flex-col items-end gap-0.5" data-contract-grade={contract.id}>
+      {#if grade?.overallGrade}
+        <span
+          class="font-display text-sm font-extrabold leading-none"
+          style="color: {gradeColor(grade.overallGrade)}"
+          data-riven-grade={grade.overallGrade}>{grade.overallGrade}</span
+        >
+      {/if}
+      {#if attrGradeKey}
+        <span
+          class="font-display text-[0.55rem] font-bold uppercase leading-none tracking-[0.06em]"
+          style="color: {attrGradeColor(attrGrade)}"
+          title={$tr("rivens.sort.attributeGrade")}
+          data-riven-attr-grade={attrGrade}>{$tr(attrGradeKey)}</span
+        >
+      {:else}
+        <span
+          class="font-display text-[0.55rem] font-bold uppercase leading-none tracking-[0.06em] text-text-muted"
+          title={$tr("rivens.detail.noGoodRollData")}
+          data-riven-attr-grade="?">{$tr("rivens.grade.unrated")}</span
+        >
+      {/if}
+    </span>
+  {/if}
+{/snippet}
 
 {#snippet contractActions()}
   <div class="grid shrink-0 gap-1">
@@ -105,6 +138,7 @@
             size={16}
             className="object-contain [filter:drop-shadow(0_0_5px_rgba(146,104,255,0.65))]"
           />
+          {@render gradeBadges()}
         </div>
         {#if statsPreview.length > 0}
           <div class="grid gap-0.5">
@@ -147,6 +181,7 @@
     </svelte:fragment>
     <svelte:fragment slot="fullActions">
       <div class="flex shrink-0 items-center gap-2">
+        {@render gradeBadges()}
         <span class="inline-flex items-center gap-1 font-display text-sm font-bold text-accent">
           <img src={PLATINUM_ICON_URL} alt="" width="14" height="14" class="shrink-0" />
           {contract.platinum}

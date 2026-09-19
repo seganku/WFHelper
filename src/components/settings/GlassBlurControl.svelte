@@ -3,7 +3,8 @@
   import { tr } from "../../lib/i18n.js";
   import { GLASS_BLUR_MAX_PX, GLASS_BLUR_MIN_PX } from "../../config/themeDefaults.js";
 
-  export let labelClass = "flex cursor-pointer items-center justify-between gap-2.5";
+  export let labelClass =
+    "flex min-w-0 cursor-pointer flex-wrap items-center justify-between gap-2.5";
 
   $: effects = $themeSettings.effects;
 </script>

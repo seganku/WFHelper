@@ -19,9 +19,11 @@
     SIDEBAR_RAIL_WIDTH,
     SIDEBAR_WIDTH_MAX,
   } from "../stores/sidebarTabs.js";
+  import { themeSettings } from "../stores/theme.js";
   import { resetTourAutoStart } from "../stores/tour.js";
   import type { MessageKey } from "../lib/i18n.js";
   import { VIEW_LABEL_KEYS, type SidebarViewName } from "../lib/viewRegistry.js";
+  import CommunityLinks from "./CommunityLinks.svelte";
   import FeedbackModal from "./FeedbackModal.svelte";
 
   $: showDevTools = $devMode;
@@ -39,30 +41,26 @@
 
   $: visibleNavItems = navItems.filter((item) => !$hiddenTabs.has(item.view));
 
-  // Live drag width, uncommitted: a pointer move must not hit localStorage per frame.
   let dragWidth: number | null = null;
   let resizing = false;
   let dragStartX = 0;
   let dragStartWidth = 0;
 
   $: effectiveWidth = dragWidth ?? $sidebarWidth;
-  // Follows the live drag, not the committed width: labels would otherwise stay
-  // rendered while the grip is already past the rail threshold.
   $: collapsed = dragWidth != null ? dragWidth < SIDEBAR_EXPAND_MIN : $sidebarCollapsed;
 
   const narrowRail = typeof window === "undefined" ? null : window.matchMedia("(max-width: 800px)");
 
-  // Publish the width globally so the content area and any other consumer of
-  // var(--sidebar-width) reflow with it. Under 800px responsive.css pins the icon
-  // rail, so the inline value is dropped there rather than fighting its :root rule.
+  function railScaledWidth(px: number, fontScale: number): number {
+    return px <= SIDEBAR_RAIL_WIDTH ? Math.round(px * fontScale) : px;
+  }
+
   function writeWidthVar(px: number): void {
     const root = document.documentElement.style;
     if (narrowRail?.matches) root.removeProperty("--sidebar-width");
     else root.setProperty("--sidebar-width", `${px}px`);
   }
 
-  // One write per frame while the grip is held: each write relayouts the whole
-  // content area, which on the mastery tab is a four-figure card count.
   let widthFrame: number | null = null;
   let pendingWidth = 0;
 
@@ -82,10 +80,11 @@
     });
   }
 
-  $: applyWidthVar(effectiveWidth);
+  $: renderedWidth = railScaledWidth(effectiveWidth, $themeSettings.fontSizes.globalScale);
+  $: applyWidthVar(renderedWidth);
 
   onMount(() => {
-    const onBreakpoint = (): void => applyWidthVar(effectiveWidth);
+    const onBreakpoint = (): void => applyWidthVar(renderedWidth);
     narrowRail?.addEventListener("change", onBreakpoint);
     return () => {
       narrowRail?.removeEventListener("change", onBreakpoint);
@@ -94,15 +93,12 @@
   });
 
   function startResize(e: PointerEvent): void {
-    // Only the primary button drags; a right- or middle-click would otherwise
-    // capture the pointer and never see a matching pointerup.
     if (e.button !== 0) return;
     resizing = true;
     dragStartX = e.clientX;
     dragStartWidth = $sidebarWidth;
     dragWidth = dragStartWidth;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    // Stops the drag from starting a text selection in the content area.
     e.preventDefault();
   }
 
@@ -131,12 +127,9 @@
     e.preventDefault();
   }
 
-  // If the active tab gets hidden, fall back to inventory so we never strand
-  // the user on a view with no way back to it.
   $: if ($hiddenTabs.has($currentView)) currentView.set("inventory");
 
   async function loadInventoryFile(): Promise<void> {
-    // seeds the helper source without claiming it - Settings owns the switch
     const result = await invoke("openInventoryFile", "helper");
     if (result) currentView.set("inventory");
   }
@@ -156,10 +149,17 @@
 
 <nav
   id="sidebar"
-  class="sidebar-shell flex min-h-0 w-[var(--sidebar-width)] shrink-0 flex-col justify-between gap-2 overflow-hidden border-r border-border bg-bg-base px-2.5 py-3.5"
+  class="sidebar-shell flex min-h-0 w-[var(--sidebar-width)] shrink-0 flex-col justify-between gap-2 border-r border-border bg-bg-base px-2.5 py-3.5 {collapsed
+    ? 'overflow-y-auto overflow-x-hidden'
+    : 'overflow-hidden'}"
   class:sidebar-collapsed={collapsed}
 >
-  <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
+  <div
+    data-sidebar-nav
+    class="flex flex-col gap-0.5 {collapsed
+      ? 'shrink-0'
+      : 'min-h-0 flex-1 overflow-y-auto overflow-x-hidden'}"
+  >
     <button
       class="nav-btn nav-btn-collapse relative flex w-full cursor-pointer items-center gap-3 rounded-md border-0 bg-transparent px-3.5 py-2.5 font-display text-base font-medium tracking-wide text-text-muted transition-colors duration-150 hover:bg-bg-hover hover:text-text-primary"
       title={$sidebarCollapsed ? $tr("nav.expandSidebar") : $tr("nav.collapseSidebar")}
@@ -315,6 +315,7 @@
       </svg>
       <span>{$tr("feedback.title")}</span>
     </button>
+    <CommunityLinks {collapsed} />
   </div>
 </nav>
 
@@ -322,8 +323,6 @@
   <FeedbackModal onClose={() => (feedbackOpen = false)} />
 {/if}
 
-<!-- A flex sibling rather than an overlay: the nav scrolls, so an absolutely
-     positioned grip inside it would scroll away from the edge. -->
 <div
   data-sidebar-grip
   class="sidebar-grip"
@@ -346,9 +345,6 @@
 ></div>
 
 <style>
-  /* At rest it must read as nothing at all. A transparent grip shows the shell's
-     --bg-deep, which paints a dark stripe beside the sidebar's gold border, so it
-     carries the same --bg-base as the sidebar and the content on either side. */
   .sidebar-grip {
     flex: 0 0 auto;
     width: 5px;
@@ -365,7 +361,6 @@
     background: var(--accent);
     outline: none;
   }
-  /* Under 800px responsive.css pins the rail, so a drag here would do nothing. */
   @media (max-width: 800px) {
     .sidebar-grip {
       display: none;
@@ -381,14 +376,21 @@
     padding-right: 0.5rem;
     gap: 0;
   }
+  /* Preflight caps an img at its own box. */
+  .sidebar-collapsed :global(.nav-btn img) {
+    max-width: none;
+  }
   @media (max-width: 800px) {
     .nav-btn :global(span) {
       display: none;
     }
     .nav-btn {
       justify-content: center;
-      padding-left: 0.625rem;
-      padding-right: 0.625rem;
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+    }
+    .nav-btn :global(img) {
+      max-width: none;
     }
   }
 </style>

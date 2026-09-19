@@ -15,8 +15,8 @@ import { useInterval } from "../timers.js";
 import { PLANET_ICON_PATHS, fissureTierClass } from "../world.js";
 import {
   applyOverlaySettingsResponse,
+  ensureOverlaySettingsLoaded,
   overlaySettings,
-  overlaySettingsLoaded,
 } from "../../stores/overlaySettings.js";
 import { addToast } from "../../stores/toasts.js";
 import { worldData, worldLastFetch, worldLoading } from "../../stores/world.js";
@@ -125,13 +125,7 @@ export function mountWorldView(): () => void {
     });
   });
 
-  if (!get(overlaySettingsLoaded)) {
-    void invoke("getOverlaySettings")
-      .then((loaded) => {
-        if (loaded) applyOverlaySettingsResponse(loaded);
-      })
-      .catch((error: unknown) => console.error("[World] getOverlaySettings failed:", error));
-  }
+  void ensureOverlaySettingsLoaded();
 
   const stopPolling = mountWorldPolling();
 

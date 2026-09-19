@@ -27,13 +27,21 @@ function itemRule(overrides: Partial<MarketAlertRule> = {}): MarketAlertRule {
     kind: "item",
     enabled: true,
     cooldownMinutes: 60,
+    noCooldown: false,
     item: { itemUrlName: "trinity_prime_chassis", side: "sell", statuses: [], maxPlatinum: 20 },
     ...overrides,
   };
 }
 
 function rivenRule(): MarketAlertRule {
-  return { id: "rule-2", name: "Bramma roll", kind: "riven", enabled: true, cooldownMinutes: 60 };
+  return {
+    id: "rule-2",
+    name: "Bramma roll",
+    kind: "riven",
+    enabled: true,
+    cooldownMinutes: 60,
+    noCooldown: false,
+  };
 }
 
 /** Both modules read storage at import, so every case needs a fresh copy. */

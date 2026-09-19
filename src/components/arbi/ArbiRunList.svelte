@@ -106,6 +106,7 @@
 <RunList
   {runs}
   {onSelect}
+  listAttrs={{ "data-arbi-run-table": "" }}
   {headers}
   {cells}
   {selected}

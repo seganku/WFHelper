@@ -76,6 +76,14 @@
               {#if item.secondary}
                 <span class="truncate text-[0.65rem] text-text-muted">{item.secondary}</span>
               {/if}
+              {#if item.rank != null}
+                <span
+                  class="shrink-0 text-[0.65rem] text-text-muted"
+                  data-analysis-item-rank={item.rank}
+                >
+                  {$tr("browse.rankValue", { value: item.rank })}
+                </span>
+              {/if}
             </span>
             <input
               list="analysis-category-options"

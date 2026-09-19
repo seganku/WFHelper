@@ -128,11 +128,8 @@ interface InventoryReadError {
 interface InventoryStatus {
   path: string | null;
   found: boolean;
-  /** The user's persisted pick. Matches the loaded file whenever `path` is set. */
   source: InventorySource;
-  /** mtime of the loaded file; the only date behind undated point-in-time fields. */
   modifiedAt: number | null;
-  /** The last read failure, or null when no file was discovered or after success. */
   lastError?: InventoryReadError | null;
 }
 
@@ -199,7 +196,6 @@ import type {
   OverlayDescriptor,
 } from "../../config/shared/overlayLayout.js";
 
-/** The engine status plus the live per-rule cooldowns. */
 export interface MarketAlertStatusPayload extends MarketAlertEngineStatus {
   /** Rule id to cooldown end, epoch ms; a rule not in cooldown is absent. */
   cooldowns: Record<string, number>;
@@ -239,6 +235,8 @@ export interface IpcInvokeMap {
       messages: { locale: string; messages: Record<string, string> };
       defaultFieldStyle: OverlayFieldStyle;
       descriptor: OverlayDescriptor;
+      canvas: { width: number; height: number };
+      lastReward: import("../../config/shared/rewardPresentation.js").RewardPresentation | null;
     };
   };
   beginOverlayEdit: { args: [kind: OverlayLayoutKind]; return: OverlayEditState };
@@ -526,7 +524,6 @@ export interface IpcInvokeMap {
     return: { saved: boolean; path?: string; error?: LedgerErrorCode };
   };
   popoutOpen: {
-    // The bare view is still accepted so an old caller keeps working.
     args: [target: PopoutTarget | PopoutView, options?: PopoutOpenOptions];
     return: { ok: boolean };
   };
@@ -621,6 +618,10 @@ export interface IpcInvokeMap {
   refreshRivenGoodRolls: {
     args: [weaponName: string];
     return: RivenGoodRollsResult;
+  };
+  gradeRivenContracts: {
+    args: [contracts: RivenContractGradeRequest[]];
+    return: RivenContractGradesResult;
   };
   createRivenAuction: {
     args: [payload: CreateRivenAuctionPayload];
@@ -760,7 +761,6 @@ export interface IpcInvokeMap {
   };
   notifySelectionComplete: {
     args: [payload: { name: string; owned: number }];
-    /** False when the payload failed validation, so a caller can log the drop. */
     return: boolean;
   };
 }
@@ -777,10 +777,8 @@ export interface RivenBestAttributes {
 }
 
 interface RivenGoodRollsResult {
-  /** Null when the sheet has no row for this weapon. */
   attributes: RivenBestAttributes | null;
-  /** ISO time the 44bananas sheet was last fetched, set even for an unknown
-   *  weapon so the UI can show the fetch time; null when never cached. */
+  /** ISO time the 44bananas sheet was last fetched; null when never cached. */
   updatedAt: string | null;
 }
 
@@ -788,6 +786,31 @@ interface RivenResult {
   unveiled: DecodedRiven[];
   veiled: VeiledRivenEntry[];
   veiledUnseen: VeiledRivenGroup[];
+}
+
+/** One warframe.market contract, as the grader reads it: the weapon by name or
+ *  family slug, each attribute by WFM url_name or label at its listed value. */
+export interface RivenContractGradeRequest {
+  weaponName: string;
+  /** The listing's mod rank (0-8). Values scale with it. */
+  modRank: number | null;
+  stats: { name: string; positive: boolean; value: number | null }[];
+}
+
+export interface RivenContractGrade {
+  overallGrade: string;
+  /** "?" when the community sheet has no row for the weapon. */
+  attributeGrade: string;
+  /** Aligned with the request's stats. */
+  stats: { grade: string; rollFloat: number }[];
+}
+
+interface RivenContractGradesResult {
+  /** One entry per request, aligned by index. */
+  grades: (RivenContractGrade | null)[];
+  /** False while the community sheet is still loading: the roll grades stand,
+   *  but every "?" attribute grade in this answer is provisional. */
+  sheetReady: boolean;
 }
 
 export interface WfmRivenListing {
@@ -809,10 +832,8 @@ export type WfmNotification =
   | { type: "listener-auth-failed" }
   // WFM pushed an order/auction change made elsewhere (website, another client).
   | { type: "orders-changed" }
-  // Main changed our presence (hold expiry, game launch/exit) - refresh the chips.
   | ({ type: "presence" } & WfmPresenceState);
 
-// Single source of truth for trade/stat types lives in config/shared/statsTypes.ts.
 import type {
   DailyStatEntry,
   DownloadStage,
@@ -824,7 +845,6 @@ import type {
 import type { TradeMatchPayload } from "../../config/shared/tradeMatch.js";
 export type { DailyStatEntry, SessionStats, TradeEvent, TradeItem, TradeType };
 
-// Single source of truth for arbitration types lives in config/shared/arbiTypes.ts.
 import type {
   ArbiImportResult,
   ArbiMissionType,
@@ -840,7 +860,6 @@ import type {
 } from "../../config/shared/arbiScheduleTypes.js";
 export type { ArbiScheduleAlerts, ArbiScheduleEntry };
 
-// Single source of truth for Profit-Taker types lives in config/shared/profitTakerTypes.ts.
 import type {
   PtImportResult,
   PtRunRecord,
@@ -852,7 +871,6 @@ type WfmTradeMatchEvent = TradeMatchPayload;
 
 interface TradeRecordedEvent {
   trade: TradeEvent;
-  /** Every listing the trade auto-closed - one trade can settle several. */
   wfmMatches: WfmTradeMatchEvent[];
 }
 

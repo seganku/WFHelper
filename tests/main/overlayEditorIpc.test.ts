@@ -13,6 +13,7 @@ import {
   OVERLAY_EDIT_PREVIEW,
   OVERLAY_EDIT_UPDATE,
   OVERLAY_LAYOUT_GET,
+  RELIC_REWARD_PRESENTATION,
 } from "../../config/shared/ipcChannels";
 import {
   DEFAULT_OVERLAY_FIELD_STYLE,
@@ -25,10 +26,13 @@ import { registerOverlayEditor } from "../../ipc/overlay/editorIpc";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
+  events: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => void>(),
 }));
 vi.mock("electron", () => ({
   app: { getAppPath: () => process.cwd() },
   ipcMain: {
+    on: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => void) =>
+      mocks.events.set(channel, handler),
     handle: (
       channel: string,
       handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>,
@@ -49,8 +53,13 @@ function windowStub(id: number, file: string) {
     send: vi.fn(),
     isDestroyed: () => false,
     getURL: () => url,
+    getZoomFactor: vi.fn(() => 1),
   });
-  const window = { isDestroyed: () => false, webContents: contents } as unknown as BrowserWindow;
+  const window = {
+    isDestroyed: () => false,
+    webContents: contents,
+    getSize: vi.fn(() => [980, 236]),
+  } as unknown as BrowserWindow;
   const event = {
     sender: contents as unknown as WebContents,
     senderFrame: { url },
@@ -66,6 +75,7 @@ function invoke(channel: string, event: IpcMainInvokeEvent, ...args: unknown[]):
 
 beforeEach(() => {
   mocks.handlers.clear();
+  mocks.events.clear();
   ctx.mainWindow = null;
   ctx.overlayWindow = null;
   ctx.plannerOverlayWindow = null;
@@ -86,6 +96,146 @@ beforeEach(() => {
 });
 
 describe("overlay editor IPC boundaries", () => {
+  it("accepts only the reward sender and freezes a completed presentation for one editor session", async () => {
+    const main = windowStub(1, "dist/index.html");
+    const reward = windowStub(2, "overlay.html");
+    const planner = windowStub(3, "overlay.html");
+    ctx.mainWindow = main.window;
+    ctx.overlayWindow = reward.window;
+    ctx.plannerOverlayWindow = planner.window;
+    const persist = vi.fn(() => true);
+    registerOverlayEditor(persist, vi.fn());
+    const report = mocks.events.get(RELIC_REWARD_PRESENTATION)!;
+    const item = {
+      name: "Forma Blueprint",
+      rarity: "common",
+      ducats: 0,
+      partOwnedCount: 0,
+      partRequiredCount: 0,
+      building: false,
+      setOwnedCount: 0,
+      setRequiredCount: 0,
+      setUrlName: null,
+      setParts: [],
+    };
+    const presentation = { count: 1, slots: [null, null, { item, price: 0, setPrice: 0 }, null] };
+    report(main.event, presentation);
+    report(planner.event, presentation);
+    const before = await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward");
+    expect(before).toMatchObject({ lastReward: null });
+    const emptyDraft = (await invoke(OVERLAY_EDIT_BEGIN, main.event, "reward")) as OverlayEditState;
+    await expect(
+      invoke(OVERLAY_EDIT_UPDATE, main.event, emptyDraft.sessionId, {
+        type: "preview",
+        count: 1,
+        variant: "last",
+      }),
+    ).rejects.toThrow("Invalid preview");
+    await invoke(OVERLAY_EDIT_END, main.event, emptyDraft.sessionId, false);
+
+    report(reward.event, presentation);
+    const draft = (await invoke(OVERLAY_EDIT_BEGIN, main.event, "reward")) as OverlayEditState;
+    item.name = "Changed input";
+    report(reward.event, { ...presentation, count: 4 });
+    const preview = (await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")) as {
+      lastReward: typeof presentation;
+      descriptor: { variants: { value: string }[] };
+    };
+    expect(preview.lastReward.slots[2]?.item.name).toBe("Forma Blueprint");
+    expect(preview.descriptor.variants.some((variant) => variant.value === "last")).toBe(true);
+    const last = (await invoke(OVERLAY_EDIT_UPDATE, main.event, draft.sessionId, {
+      type: "preview",
+      count: 4,
+      variant: "last",
+    })) as OverlayEditState;
+    expect(last.previewCount).toBe(1);
+    expect(last.previewVariant).toBe("last");
+
+    report(reward.event, presentation);
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      lastReward: { slots: [null, null, { item: { name: "Forma Blueprint" } }, null] },
+    });
+    preview.lastReward.slots[2]!.item.name = "Changed preview response";
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      lastReward: { slots: [null, null, { item: { name: "Forma Blueprint" } }, null] },
+    });
+    await invoke(OVERLAY_EDIT_END, main.event, draft.sessionId, false);
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      lastReward: { slots: [null, null, { item: { name: "Changed input" } }, null] },
+    });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("resolves logical preview dimensions from live size and zoom, or canonical saved bounds", async () => {
+    const main = windowStub(1, "dist/index.html");
+    const reward = windowStub(2, "overlay.html");
+    ctx.mainWindow = main.window;
+    ctx.overlayWindow = reward.window;
+    vi.mocked(reward.window.getSize).mockReturnValue([900, 375]);
+    reward.contents.getZoomFactor.mockReturnValue(1.25);
+    const bounds = vi.fn(() => ({ width: 1000, height: 500, zoomFactor: 1.25 }));
+    registerOverlayEditor(
+      vi.fn(() => true),
+      vi.fn(),
+      bounds,
+    );
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      canvas: { width: 720, height: 300 },
+    });
+    ctx.overlayWindow = null;
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      canvas: { width: 800, height: 400 },
+    });
+    expect(bounds).toHaveBeenCalledWith("reward");
+  });
+
+  it("saves an offset dragged inside a grown window and still bounds a hostile one", async () => {
+    const main = windowStub(1, "dist/index.html");
+    const reward = windowStub(2, "overlay.html");
+    ctx.mainWindow = main.window;
+    ctx.overlayWindow = reward.window;
+    vi.mocked(reward.window.getSize).mockReturnValue([980, 420]);
+    const persist = vi.fn(() => true);
+    registerOverlayEditor(persist, vi.fn());
+    expect(await invoke(OVERLAY_EDIT_PREVIEW, main.event, "reward")).toMatchObject({
+      canvas: { width: 980, height: 420 },
+      descriptor: { canvas: { width: 980, height: 236 } },
+    });
+    const draft = (await invoke(OVERLAY_EDIT_BEGIN, main.event, "reward")) as OverlayEditState;
+    const move = (y: number) =>
+      invoke(OVERLAY_EDIT_UPDATE, main.event, draft.sessionId, {
+        type: "field",
+        field: "itemName",
+        patch: { y },
+      }) as Promise<OverlayEditState>;
+    expect((await move(1e9)).layout.fields.itemName).toMatchObject({ y: 10_000 });
+    expect((await move(-1e9)).layout.fields.itemName).toMatchObject({ y: -10_000 });
+    expect((await move(390)).layout.fields.itemName).toMatchObject({ y: 390 });
+    await invoke(OVERLAY_EDIT_END, main.event, draft.sessionId, true);
+    expect(persist).toHaveBeenCalledOnce();
+    expect(
+      ((await invoke(OVERLAY_LAYOUT_GET, reward.event)) as OverlayEditState).layout.fields.itemName,
+    ).toMatchObject({ y: 390 });
+  });
+
+  it("keeps Arbitration offsets saved with the former taller canvas", async () => {
+    const arbi = windowStub(1, "arbi-overlay.html");
+    ctx.arbiSummaryWindow = arbi.window;
+    ctx.overlaySettings.overlayLayouts = {
+      arbiSummary: {
+        version: 1,
+        fields: { vitusValue: { ...DEFAULT_OVERLAY_FIELD_STYLE, y: 440 } },
+      },
+    };
+    registerOverlayEditor(
+      vi.fn(() => true),
+      vi.fn(),
+    );
+    expect(
+      ((await invoke(OVERLAY_LAYOUT_GET, arbi.event)) as OverlayEditState).layout.fields.vitusValue,
+    ).toMatchObject({ y: 440 });
+  });
+
   it("returns only the live sender's saved layout while another renderer owns a draft", async () => {
     const main = windowStub(1, "dist/index.html");
     const planner = windowStub(2, "overlay.html");

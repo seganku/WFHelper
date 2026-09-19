@@ -37,10 +37,40 @@ const LEDGER_ROWS = [
     items: [{ internalName: "", displayName: "Orokin Cell", count: 1, direction: "received" }],
     partner: "Vor",
   },
+  {
+    id: "live-arcane-r0",
+    date: SEEDED_AT,
+    type: "sale",
+    platChange: 20,
+    items: [
+      {
+        internalName: "",
+        displayName: "Arcane Energize (RANK 0)",
+        count: 1,
+        direction: "given",
+        wfmSlug: "arcane_energize",
+      },
+    ],
+    partner: "Darvo",
+  },
+  {
+    id: "live-arcane-r5",
+    date: SEEDED_AT,
+    type: "sale",
+    platChange: 200,
+    items: [
+      {
+        internalName: "",
+        displayName: "Arcane Energize (RANK 5)",
+        count: 1,
+        direction: "given",
+        wfmSlug: "arcane_energize",
+      },
+    ],
+    partner: "Darvo",
+  },
 ];
 
-// The first record repeats live-a exactly, so the preview counts it as a
-// duplicate and only the second row is ever staged.
 const IMPORT_ROWS = [
   { date: SEEDED_AT, type: "sale", items: "Forma", platinum: 10, partner: "Kestrel" },
   { date: SEEDED_AT, type: "sale", items: "Nitain Extract", platinum: 42, partner: "Teshin" },
@@ -59,7 +89,7 @@ test.describe("Market analysis", () => {
     page = harness.page;
     await openView(page, "analytics");
     await expect(page.locator("[data-analysis-view]")).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator("[data-analysis-row]")).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.locator("[data-analysis-row]")).toHaveCount(4, { timeout: 30_000 });
   });
 
   test.afterAll(async () => {
@@ -87,6 +117,17 @@ test.describe("Market analysis", () => {
     );
   }
 
+  test("one arcane sold at two ranks rolls up as two rows that name the rank", async () => {
+    const sold = page.locator('[data-analysis-top-items="sold"]');
+    await expect(sold).toBeVisible({ timeout: 30_000 });
+    for (const rank of [0, 5]) {
+      const row = sold.locator(`[data-analysis-item-row="arcane_energize:r${rank}"]`);
+      await expect(row).toHaveCount(1);
+      await expect(row.locator(`[data-analysis-item-rank="${rank}"]`)).toHaveCount(1);
+    }
+    await page.screenshot({ path: test.info().outputPath("analytics-arcane-rank.png") });
+  });
+
   test("a debounced bound edit commits, and picking a preset cancels it", async () => {
     const range = page.locator("[data-analysis-range]");
 
@@ -94,11 +135,10 @@ test.describe("Market analysis", () => {
     await expect(range).toHaveAttribute("data-analysis-range-current", "custom");
     await expect(page.locator("[data-analysis-row]")).toHaveCount(0);
 
-    // The pending edit would otherwise fire after the preset and re-empty the table.
     await editBound(`${YEAR + 1}-01-01`, "all");
     await page.waitForTimeout(1_000);
     await expect(range).toHaveAttribute("data-analysis-range-current", "all");
-    await expect(page.locator("[data-analysis-row]")).toHaveCount(2);
+    await expect(page.locator("[data-analysis-row]")).toHaveCount(4);
   });
 
   test("the row editor floors credits and tax at zero", async () => {
@@ -148,7 +188,7 @@ test.describe("Market analysis", () => {
       "Imported 1 rows, skipped 1 duplicates.",
       { timeout: 30_000 },
     );
-    await expect(page.locator("[data-analysis-row]")).toHaveCount(3);
+    await expect(page.locator("[data-analysis-row]")).toHaveCount(5);
   });
 });
 

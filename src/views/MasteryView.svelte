@@ -39,12 +39,17 @@
   } from "../stores/data.js";
   import { buildSubsumedFamilySet, isFrameSubsumed, isSubsumableFrame } from "../lib/helminth.js";
   import { componentUniqueNameAliases } from "../../config/shared/componentNames.js";
+  import { buildPartState, type PartState } from "../lib/craftingTree.js";
   import { buildMasteryLookup, normalizeLookupKey } from "../lib/masteryLookup.js";
   import { masteryProjectionSubtext } from "../lib/masteryProjection.js";
   import {
     buildMasteryRoadmap,
+    componentPartState,
     estimateMasteryPurchaseCost,
     componentMarketSlug,
+    isComponentHeld,
+    masteryBuildReadiness,
+    masteryPartCounts,
   } from "../lib/masteryRoadmap.js";
   import {
     buildMasteryPlan,
@@ -63,7 +68,7 @@
   import { setRootOf } from "../lib/inventory/fullSets.js";
   import { parseOwnedRelics } from "../lib/relic.js";
   import { activeItem, activeComponent } from "../stores/modals.js";
-  import { hideFounderMasteryItems } from "../stores/preferences.js";
+  import { hideFounderMasteryItems, showVaultedBadges } from "../stores/preferences.js";
   import { locale, tr, type Translator } from "../lib/i18n.js";
   import type { MessageKey } from "../lib/i18n.js";
   import SharedFilterBar from "../components/SharedFilterBar.svelte";
@@ -90,7 +95,7 @@
   import ArchonShardSummary from "../components/archon/ArchonShardSummary.svelte";
   import { parseArchonShards, summarizeArchonShards } from "../lib/inventory/archonShards.js";
   import { fallbackNameFromUniqueName } from "../../config/shared/displayName.js";
-  import type { ComponentInfo, MasteryCategoryStats, ProgressPair } from "../types/inventory.js";
+  import type { MasteryCategoryStats, ProgressPair } from "../types/inventory.js";
   import type { FoundryState } from "../types/filters.js";
 
   let withoutInventory = false;
@@ -135,8 +140,6 @@
   const VIEW_TAB_KEY = "wf_mastery_view_tab";
   const CAT_TAB_KEY = "wf_mastery_cat_tab";
   const STATUS_TAB_KEY = "wf_mastery_status_tab";
-  // Single source of truth per tab row: restore() runs at init and needs the bare
-  // keys, the labeled arrays below translate that same list.
   const STATUS_TAB_DEFS: Array<{ key: string; labelKey: MessageKey }> = [
     { key: "all", labelKey: "common.all" },
     { key: "missing", labelKey: "common.missing" },
@@ -160,7 +163,6 @@
   $: STATUS_TABS = STATUS_TAB_DEFS.map(({ key, labelKey }) => ({ key, label: $tr(labelKey) }));
   $: VIEW_TABS = VIEW_TAB_DEFS.map(({ key, labelKey }) => ({ key, label: $tr(labelKey) }));
 
-  // Category keys are data-driven; a stale restore falls back once categories load.
   let catFilter = readStorage(CAT_TAB_KEY) || "all";
   let statusFilter = restoreStatusTab();
   let viewTab = restoreViewTab();
@@ -317,7 +319,6 @@
   }
 
   $: masterySummaryItems = buildMasterySummary(displayMasteryData, foundryIndex, $tr, $locale);
-  // Straight from the account, so unaffected by the founder-item filter.
   $: completion = $masteryData?.stats?.completion ?? null;
   $: starChartRows = (
     completion
@@ -338,7 +339,6 @@
       : []
   ) as Array<[string, ProgressPair]>;
 
-  // Keyed by productUniqueName, name as fallback; parts match the same set.
   type FoundryStatus = "in-progress" | "claimable";
   function buildFoundryIndex(foundry: typeof $foundryData): {
     byUnique: SvelteMap<string, FoundryStatus>;
@@ -350,7 +350,6 @@
     for (const b of foundry.building) {
       const status: FoundryStatus =
         b.endDate && b.endDate.getTime() <= now ? "claimable" : "in-progress";
-      // Claimable outranks in-progress if the same product somehow appears twice.
       if (b.productUniqueName && byUnique.get(b.productUniqueName) !== "claimable") {
         byUnique.set(b.productUniqueName, status);
       }
@@ -370,16 +369,12 @@
     );
   }
 
-  function isComponentOwned(comp: ComponentInfo): boolean {
-    return comp.owned === true || (comp.ownedCount ?? 0) >= (comp.itemCount || 1);
-  }
-
-  function componentStateLabelKey(state: "building" | "owned" | "missing"): MessageKey {
+  function componentStateLabelKey(state: "building" | PartState): MessageKey {
     if (state === "building") return "mastery.badgeCrafting";
+    if (state === "blueprint") return "common.blueprintOwnedNotBuilt";
     return state === "owned" ? "common.owned" : "common.missing";
   }
 
-  /** The card badges are the source of truth here: "Ready" is a finished build. */
   function foundryStateOf(
     status: FoundryStatus | undefined,
     buildable: boolean,
@@ -392,8 +387,6 @@
   $: foundryIndex = buildFoundryIndex($foundryData);
   $: subsumedFamilies = buildSubsumedFamilySet($inventoryData, $itemDb);
 
-  // Derived only, every render: shards are never cached, so a stale inventory
-  // simply shows fewer of them.
   $: archonShards = parseArchonShards($inventoryData);
   $: archonSummary = summarizeArchonShards(archonShards);
 
@@ -402,7 +395,6 @@
     return itemLabel(entry) || fallbackNameFromUniqueName(itemType);
   }
 
-  // Every mastery row, not only Warframes: the planner opens weapons through it too.
   function openMasteryItemByUniqueName(itemType: string): void {
     const match = hydratedMasteryItems.find(
       (item) => (item.uniqueName || item.internalName) === itemType,
@@ -410,13 +402,13 @@
     if (match) activeItem.set(match);
   }
 
-  // Precompute values outside the keyed loop so WFM updates patch only changed
-  // items instead of rerendering the full template.
   function hydrateMasteryItems(
     data: typeof $masteryData,
     wfmLookup: typeof $wfmItems,
     foundry: ReturnType<typeof buildFoundryIndex>,
     subsumed: Set<string>,
+    ownership: Map<string, number>,
+    db: typeof $itemDb,
   ) {
     if (!data) return [];
     return data.items.map((item) => {
@@ -427,8 +419,7 @@
         : Math.max(0, Math.min(100, Math.floor((item.rank / Math.max(item.maxRank, 1)) * 100)));
       const wfm = wfmLookup[item.name.toLowerCase()] || null;
       const foundryStatus = foundryStatusFor(item, foundry);
-      // undefined, not false, for anything that can never be fed to the
-      // Helminth: the strict tri-state filter drops those rows entirely.
+      // undefined, not false: the strict tri-state filter drops those rows entirely.
       const isSubsumed =
         item.category === "Warframes" && isSubsumableFrame(item.name)
           ? isFrameSubsumed(item.name, subsumed)
@@ -439,11 +430,19 @@
         building: comp.uniqueName
           ? componentUniqueNameAliases(comp.uniqueName).some((un) => foundry.byUnique.has(un))
           : false,
+        blueprintHeld: comp.uniqueName
+          ? buildPartState(
+              { uniqueName: comp.uniqueName, count: comp.itemCount || 1 },
+              ownership,
+              db,
+              item.uniqueName,
+            ) === "blueprint"
+          : false,
       }));
-      const partsOwned = components.length > 0 ? components.filter(isComponentOwned).length : null;
+      const partsOwned =
+        components.length > 0 ? masteryPartCounts(components.map(componentPartState)).built : null;
       const owned = item.currentlyOwned === true;
-      const buildable =
-        !owned && components.length > 0 && components.every((comp) => comp.owned === true);
+      const buildable = !owned && masteryBuildReadiness(components) === "buildable";
       const rootPrice = wfm?.url_name ? (getCachedPriceState(wfm.url_name)?.median ?? null) : null;
       const estimatedCost = estimateMasteryPurchaseCost(rootPrice, components, (component) => {
         const slug = componentMarketSlug(item.name, component, wfmLookup);
@@ -463,7 +462,6 @@
         leveledUp: item.rank > 0,
         amount: owned ? 1 : 0,
         owned,
-        // Snapshot-only lookup: no per-card hydration for 800+ mastery rows.
         platinum: rootPrice,
         estimatedCost,
         buildable,
@@ -478,6 +476,8 @@
     $wfmItems,
     foundryIndex,
     subsumedFamilies,
+    $componentOwnership,
+    $itemDb,
   );
   $: filtered = applySharedFiltersAndSort(
     hydratedMasteryItems
@@ -512,8 +512,6 @@
     });
   }
 
-  // One walk per pin over the whole item DB, so the plan is gated on the open
-  // tab and reads the mastery rows, not the hydrated ones a WFM tick rewrites.
   const EMPTY_MASTERY_PLAN: MasteryPlan = {
     items: [],
     totals: [],
@@ -530,7 +528,6 @@
       : EMPTY_MASTERY_PLAN;
   $: pinnedSet = new Set($masteryPins);
 
-  /** Mastered items by uniqueName, valued with the label the undo notice needs. */
   $: masteredMasteryLabels = (() => {
     const mastered = new SvelteMap<string, string>();
     for (const item of displayMasteryData?.items ?? []) {
@@ -541,8 +538,6 @@
     return mastered;
   })();
 
-  // Pins the account has since mastered leave on their own. One notice per drop
-  // event, so mastering a second item cannot swallow the first undo.
   let autoUnpinNotices: Array<{
     id: number;
     dropped: string[];
@@ -600,7 +595,6 @@
   const RING_R = 52;
   const RING_C = 2 * Math.PI * RING_R;
 
-  // Incomplete Sets sits just before Misc, which is the catch-all bucket.
   $: categoryTabs = (() => {
     const tabs = categories.map((cat) => ({ key: cat, label: cat }));
     const setsTab = { key: INCOMPLETE_SETS_TAB, label: $tr("mastery.incompleteSets") };
@@ -609,17 +603,13 @@
     return [{ key: "all", label: $tr("common.all") }, ...tabs];
   })();
 
-  // Drop a restored category that no longer exists in the loaded data.
   $: if (categories.length > 0 && !categoryTabs.some((tab) => tab.key === catFilter)) {
     catFilter = "all";
   }
 
-  // A set row has no mastery status of its own (rank 0 of 1), so every set read
-  // as "not mastered". Resolve it from the set root instead.
+  // A set row has no mastery status of its own (rank 0 of 1).
   $: setStatusLookup = buildMasteryLookup(displayMasteryData);
 
-  // Started but unfinished. Shares the filter bar with the category tabs, so
-  // mastered/prime/vaulted and the sort dropdown all apply here too.
   $: incompleteSets = applySharedFiltersAndSort(
     $parsedItems
       .filter((entry) => entry.inventoryGroup === "incomplete_sets")
@@ -903,7 +893,7 @@
                   >
                     <div class="item-img-wrap">
                       <ItemImage src={set.imageUrl} alt={itemLabel(set)} auditKey={set.name} />
-                      {#if set.vaulted}<span class="vault-badge">V</span>{/if}
+                      {#if $showVaultedBadges && set.vaulted}<span class="vault-badge">V</span>{/if}
                       <span
                         class="absolute right-2 bottom-1.5 font-display text-base font-bold text-info drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
                         >{set.ownedPartTypes ?? 0}/{set.totalPartTypes ?? 0}</span
@@ -949,7 +939,8 @@
                   >
                     <div class="item-img-wrap">
                       <ItemImage src={item.imageUrl} alt={itemLabel(item)} auditKey={item.name} />
-                      {#if item.vaulted}<span class="vault-badge">V</span>{/if}
+                      {#if $showVaultedBadges && item.vaulted}<span class="vault-badge">V</span
+                        >{/if}
                       {#if pinKey}
                         <button
                           type="button"
@@ -1071,16 +1062,17 @@
                       {#if (item.components || []).length > 0}
                         <div class="mt-1.5 flex flex-wrap gap-1">
                           {#each (item.components || []).slice(0, 8) as comp, compIndex (`${comp.uniqueName || comp.name || "component"}-${compIndex}`)}
-                            {@const isOwned =
-                              comp.owned || (comp.ownedCount ?? 0) >= (comp.itemCount || 1)}
                             {@const compState = comp.building
                               ? "building"
-                              : isOwned
-                                ? "owned"
-                                : "missing"}
+                              : comp.blueprintHeld
+                                ? "blueprint"
+                                : isComponentHeld(comp)
+                                  ? "owned"
+                                  : "missing"}
                             <button
                               type="button"
                               class="comp-dot h-1.5 w-1.5 rounded-full border border-transparent {compState}"
+                              data-part-state={compState}
                               title="{itemLabel(comp) || '?'}: {$tr(
                                 componentStateLabelKey(compState),
                               )}"
@@ -1147,8 +1139,8 @@
     background: color-mix(in oklab, var(--danger) 65%, transparent);
     border-color: color-mix(in oklab, var(--danger) 60%, transparent);
   }
-  /* Amber so a building part reads apart from owned (green) and missing (red). */
-  .comp-dot.building {
+  .comp-dot.building,
+  .comp-dot.blueprint {
     background: color-mix(in oklab, var(--warning) 70%, transparent);
     border-color: color-mix(in oklab, var(--warning) 65%, transparent);
   }

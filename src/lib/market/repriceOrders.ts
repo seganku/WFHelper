@@ -19,7 +19,6 @@ export interface RepriceRow {
   sellBook: readonly PricingListing[] | null;
   nextPrice: number | null;
   skipReason: RepriceSkipReason | null;
-  /** Send gate. An unselected row is still priced, so the preview stays complete. */
   selected: boolean;
 }
 
@@ -60,7 +59,12 @@ export function priceRepriceRow(
 
   const suggestion = suggestPrice(
     config,
-    { sellListings: row.sellBook, currentPrice: row.currentPrice, ownUserName },
+    {
+      sellListings: row.sellBook,
+      currentPrice: row.currentPrice,
+      ownPerTrade: row.order.perTrade ?? 1,
+      ownUserName,
+    },
     rule,
   );
   if (suggestion.price === null) return { ...row, nextPrice: null, skipReason: "no-price" };
@@ -75,7 +79,6 @@ export function repriceRowsToSend(rows: readonly RepriceRow[]): RepriceRow[] {
 }
 
 interface RepriceTotals {
-  /** Every row in the list; the other counts cover the selected rows a run would send. */
   rows: number;
   sending: number;
   raised: number;

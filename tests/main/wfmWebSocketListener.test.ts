@@ -115,3 +115,79 @@ describe("wfmWebSocketListener sign-in errors", () => {
     expect(sockets).toHaveLength(4);
   });
 });
+
+describe("wfmWebSocketListener reconnect backoff", () => {
+  function authenticateThenClose(socket: FakeSocket): void {
+    socket.emit("open");
+    socket.emit("message", { route: "cmd/auth/signIn:ok" });
+    socket.emit("close");
+  }
+
+  it("backs off a server that authenticates and then drops the socket", async () => {
+    const listener = await freshListener();
+    listener.startListening("token", vi.fn());
+
+    // Five rounds of authenticate-then-close, never holding long enough to settle.
+    for (let round = 0; round < 5; round++) {
+      authenticateThenClose(sockets[sockets.length - 1]);
+      await advanceToNextSocket();
+    }
+
+    expect(sockets).toHaveLength(6);
+    // A reset-on-signIn would reconnect at the 1s base delay forever; backing
+    // off means the pending delay has grown well past it.
+    vi.advanceTimersByTime(1_500);
+    expect(sockets).toHaveLength(6);
+
+    listener.stopListening();
+  });
+
+  it("resets the backoff once a connection has held", async () => {
+    const listener = await freshListener();
+    listener.startListening("token", vi.fn());
+
+    authenticateThenClose(sockets[0]);
+    await advanceToNextSocket();
+
+    sockets[1].emit("open");
+    sockets[1].emit("message", { route: "cmd/auth/signIn:ok" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    sockets[1].emit("close");
+    await advanceToNextSocket();
+
+    expect(sockets).toHaveLength(3);
+
+    listener.stopListening();
+  });
+});
+
+describe("wfmWebSocketListener token rotation", () => {
+  it("reconnects with the rotated token rather than the dead one", async () => {
+    const listener = await freshListener();
+    const common = await import("../../services/wfmWebSocketCommon");
+    const send = vi.mocked(common.sendWfmWsMessage);
+    listener.startListening("first", vi.fn());
+
+    listener.updateListenerToken("second");
+    sockets[0].emit("open");
+    sockets[0].emit("close");
+    await advanceToNextSocket();
+    send.mockClear();
+    sockets[1].emit("open");
+
+    const sent = JSON.stringify(send.mock.calls);
+    expect(sent).toContain("second");
+    expect(sent).not.toContain("first");
+
+    listener.stopListening();
+  });
+
+  it("ignores a rotation once listening has stopped", async () => {
+    const listener = await freshListener();
+    listener.startListening("first", vi.fn());
+    listener.stopListening();
+
+    expect(() => listener.updateListenerToken("second")).not.toThrow();
+    expect(sockets).toHaveLength(1);
+  });
+});

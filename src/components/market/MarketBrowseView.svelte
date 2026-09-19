@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { WFM_MOD_VARIANTS } from "../../../config/shared/wfmOrders.js";
+  import { formatUnitPlatinum, WFM_MOD_VARIANTS } from "../../../config/shared/wfmOrders.js";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
   import ItemImage from "../ItemImage.svelte";
@@ -100,8 +100,6 @@
   $: catalog = buildCatalog($wfmItems);
 
   function buildCatalog(lookup: WfmItemsLookup): BrowseItem[] {
-    // The lookup is keyed by name and includes aliases, so several keys can
-    // share one slug - dedupe or the suggestion list gets duplicate keys.
     const bySlug = new SvelteMap<string, BrowseItem>();
     const named = new SvelteSet<string>();
     for (const entry of Object.values(lookup)) {
@@ -120,8 +118,6 @@
 
   $: suggestions = buildSuggestions(catalog, query);
   $: suggestionsOpen = showSuggestions && suggestions.length > 0;
-  // A new query builds a new list, so the highlight must not stay on the index
-  // it held for the old one.
   $: if (suggestions) activeSuggestion = 0;
 
   function buildSuggestions(items: BrowseItem[], rawQuery: string): BrowseItem[] {
@@ -158,8 +154,7 @@
       moveSuggestion(-1);
       return;
     }
-    // warframe.market opens the highlighted row on Tab, so steal the key only while
-    // the list offers something; Shift+Tab stays normal focus traversal.
+    // warframe.market opens the highlighted row on Tab.
     const opensSuggestion = event.key === "Enter" || (event.key === "Tab" && !event.shiftKey);
     if (opensSuggestion && showSuggestions && suggestions.length > 0) {
       const target = suggestions[activeSuggestion] ?? suggestions[0];
@@ -250,8 +245,7 @@
     }
   }
 
-  // The endpoint caps each side at 500 listings, so max-rank filtering must happen
-  // upstream before rank-zero listings can crowd out maxed ones.
+  // The endpoint caps each side at 500 listings, so max-rank filtering must happen upstream.
   function currentFetchRank(): number | null {
     return rankFilter === "maxed" && effectiveMaxRank > 0 ? effectiveMaxRank : null;
   }
@@ -325,9 +319,7 @@
 
   $: selectedDbEntry = selected?.gameRef ? ($itemDb[selected.gameRef] ?? null) : null;
 
-  // The catalog is English because warframe.market is. Only the label follows the
-  // game language; every slug, order and chat line still goes out in English.
-  // `db` arrives as a parameter so item-db-updated repaints the name.
+  // The catalog is English because warframe.market is. Only the label follows the game language.
   function catalogLabel(
     entry: { name: string; gameRef?: string | null },
     db: typeof $itemDb,
@@ -341,8 +333,7 @@
     ranks: Array<{ rank: number; count: number }>;
   }
 
-  // Mods/arcanes come as one parsed entry per rank; other groups can repeat
-  // an item across set-style views, where max avoids double-counting.
+  // Mods/arcanes come as one parsed entry per rank.
   function computeOwned(item: BrowseItem | null, parsed: ParsedItem[]): OwnedInfo {
     if (!item) return { total: 0, ranks: [] };
     const nameKey = item.name.toLowerCase();
@@ -396,8 +387,8 @@
     if (rank === "maxed" && effectiveMaxRank > 0) {
       out = out.filter((entry) => (entry.rank ?? 0) >= effectiveMaxRank);
     }
-    if (min != null && min > 0) out = out.filter((entry) => entry.platinum >= min);
-    if (max != null && max > 0) out = out.filter((entry) => entry.platinum <= max);
+    if (min != null && min > 0) out = out.filter((entry) => entry.unitPlatinum >= min);
+    if (max != null && max > 0) out = out.filter((entry) => entry.unitPlatinum <= max);
     return out;
   }
 
@@ -431,12 +422,19 @@
     }, FEEDBACK_TTL_MS);
   }
 
-  // The translator arrives as a parameter so the tooltip follows the locale.
   function buildWhisper(entry: OrderBookEntry, t: Translator): string {
     if (!selected) return "";
     const rankSuffix = ranked && entry.rank != null ? ` (Rank ${entry.rank})` : "";
     const variantSuffix = subtype === "atragraph" ? " (Atragraph)" : "";
     const itemText = `${selected.name}${variantSuffix}${rankSuffix}`;
+    if (entry.perTrade > 1) {
+      return t(side === "sell" ? "common.whisperBuyBulk" : "common.whisperSellBulk", {
+        user: entry.userName,
+        item: itemText,
+        count: entry.perTrade,
+        platinum: entry.platinum,
+      });
+    }
     if (side === "sell") {
       return t("common.whisperBuy", {
         user: entry.userName,
@@ -957,8 +955,23 @@
                       >{entry.rank != null ? `R${entry.rank}` : "-"}</td
                     >
                   {/if}
-                  <td class="text-right font-display text-base font-bold text-accent"
-                    >{entry.platinum}p</td
+                  <td
+                    class="text-right font-display text-base font-bold text-accent"
+                    data-browse-unit-plat={formatUnitPlatinum(entry.unitPlatinum)}
+                    title={entry.perTrade > 1
+                      ? $translate("orderbook.perTradeTitle", {
+                          platinum: entry.platinum,
+                          count: entry.perTrade,
+                        })
+                      : undefined}
+                    >{formatUnitPlatinum(entry.unitPlatinum)}p{#if entry.perTrade > 1}<span
+                        class="block text-[0.68rem] font-normal text-text-muted"
+                        data-browse-per-trade={entry.perTrade}
+                        >{$translate("orderbook.perTrade", {
+                          count: entry.perTrade,
+                          platinum: entry.platinum,
+                        })}</span
+                      >{/if}</td
                   >
                   <td class="text-right">
                     <button
@@ -995,7 +1008,6 @@
 </div>
 
 <style>
-  /* Sell/buy sides mirror the Post WTS (green) / Post WTB (red) buttons. */
   .browse-side-sell {
     color: color-mix(in oklab, var(--success) 65%, var(--text-secondary));
   }

@@ -83,8 +83,6 @@
   $: QUALITY_OPTIONS = QUALITY_OPTION_KEYS.map(
     ([key, i18nKey]) => [key, $tr(i18nKey)] as [RelicQualityModeView, string],
   );
-  // Typed quality words in the search box filter by owned refinement; the
-  // localised labels have to be listed here so the search sees them too.
   $: QUALITY_LABELS = {
     intact: $tr("relics.quality.intact"),
     exceptional: $tr("relics.quality.exceptional"),
@@ -295,13 +293,10 @@
     }
   });
 
-  // Stop this view's background warmups after navigation.
   onDestroy(() => {
     warmupController.destroy();
   });
 
-  // Keep owned relic counts in sync regardless of whether relic DB was loaded
-  // from this view or preloaded elsewhere (App startup warmup).
   $: if ($relicDb && $inventoryData) {
     relicOwnedCounts.set(parseOwnedRelics($inventoryData, $relicDb));
   }
@@ -370,7 +365,6 @@
     );
   }
 
-  // The three reward lookups are named here so the filter follows their rebuilds.
   $: needContext = {
     safety: $inventorySafetyContext,
     building: foundryBuildProducts($foundryData),
@@ -380,8 +374,7 @@
       isOwnedRewardIn(reward, rewardGameRefBySlug, ownedRewardInternalNames, ownedRewardNames),
   } satisfies RewardNeedContext;
 
-  // $relicEvRevision / $priceCacheRevision are listed as args (and ignored by
-  // the function) only so Svelte re-runs this when EV/price caches invalidate.
+  // $relicEvRevision / $priceCacheRevision are listed as args (and ignored by the function) only so Svelte re-runs this.
   $: groups = computeFilteredRelicGroups(
     $relicDb,
     Boolean($inventoryData),
@@ -399,14 +392,10 @@
     ownedCounts: $relicOwnedCounts,
   });
 
-  // Re-run warmup for the currently selected squad/quality. Debounced inside
-  // the controller so simultaneous store updates collapse into one warmup run.
   $: if ($relicViewState.squadSize || $relicViewState.qualityMode) {
     if ($relicDb) warmupController.scheduleWarmup();
   }
 
-  // When any background or modal fetch writes fresh prices into cache,
-  // rebuild EV snapshots from the updated reward prices.
   $: if ($priceCacheRevision && $relicDb) {
     warmupController.scheduleEvRefreshFromPriceUpdate();
   }
@@ -440,7 +429,6 @@
     if (selected && ownedCount(group, selected) > 0) {
       return selected;
     }
-    // A radiant in the vault beats defaulting to intact.
     return highestOwnedQuality(RELIC_QUALITY_COLUMNS, (quality) => ownedCount(group, quality));
   }
 
@@ -475,7 +463,6 @@
     return qualityEvData(group, mode);
   }
 
-  // The refinement selector picks the pile; "owned" means every refinement together.
   function ownedCountForMode(group: RelicGroup, mode: RelicQualityMode): number {
     if (mode !== "owned") return ownedCount(group, mode);
     return RELIC_QUALITY_COLUMNS.reduce((sum, quality) => sum + ownedCount(group, quality), 0);
@@ -637,10 +624,7 @@
     {$tr("relics.title", { count: groups.length })}
   </h2>
   <div class="view-sticky-filters mb-4" data-tour="relic-filters">
-    <div
-      class="flex flex-wrap items-end border-b border-border-subtle min-[1800px]:flex-nowrap"
-      data-relic-filter-row
-    >
+    <div class="flex flex-wrap items-end border-b border-border-subtle" data-relic-filter-row>
       <div class="shrink-0" data-relic-tier-tabs>
         <HeaderTabs
           options={TIER_TABS}
@@ -649,7 +633,7 @@
         />
       </div>
       <div
-        class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 pb-2 min-[1800px]:flex-nowrap"
+        class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 pb-2"
         data-relic-filter-controls
       >
         <SearchBox
@@ -659,7 +643,7 @@
           class="w-40 min-w-40 shrink-0"
         />
 
-        <div class="shrink-0 [&_.sort-control-select]:w-28 [&_.sort-control-select]:min-w-28">
+        <div class="shrink-0 [&_.sort-control-select]:min-w-28">
           <SortControl
             value={$relicViewState.sortMode}
             options={SORT_OPTIONS}
@@ -669,10 +653,11 @@
           />
         </div>
 
+        <!-- A select clips its value without an ellipsis. -->
         <label class="shared-filter-sort" title={$tr("relics.ownershipTitle")}>
           <span>{$tr("common.relics")}</span>
           <select
-            class="shared-filter-select w-32 min-w-32"
+            class="shared-filter-select min-w-32"
             value={$relicViewState.ownershipMode}
             on:change={setRelicOwnershipMode}
           >
@@ -696,7 +681,7 @@
         <label class="shared-filter-sort" title={$tr("relics.qualityTitle")}>
           <span>{$tr("relics.qualityLabel")}</span>
           <select
-            class="shared-filter-select w-32 min-w-32"
+            class="shared-filter-select min-w-32"
             data-relic-quality
             value={$relicViewState.qualityMode}
             on:change={setRelicQualityMode}
@@ -710,7 +695,7 @@
         <label class="shared-filter-sort" title={$tr("relics.vaultedTitle")}>
           <span>{$tr("relics.vaultedLabel")}</span>
           <select
-            class="shared-filter-select w-28 min-w-28"
+            class="shared-filter-select min-w-28"
             value={$relicViewState.vaultedMode}
             on:change={setRelicVaultedMode}
           >
@@ -723,7 +708,7 @@
         <label class="shared-filter-sort" title={$tr("relics.squadTitle")}>
           <span>{$tr("relics.squadLabel")}</span>
           <select
-            class="shared-filter-select w-24 min-w-24"
+            class="shared-filter-select min-w-24"
             value={$relicViewState.squadSize}
             on:change={setRelicSquadSize}
           >

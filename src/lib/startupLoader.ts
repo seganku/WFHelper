@@ -5,6 +5,7 @@ import { itemDb, parsedItems, wfmItems } from "../stores/data.js";
 import { recordSelectionCompleteness, savedSelections } from "../stores/inventorySelection.js";
 import { relicDb } from "../stores/relics.js";
 import { applyUpdateState } from "../stores/updates.js";
+import { ensureOverlaySettingsLoaded } from "../stores/overlaySettings.js";
 import { watchBaroWishlistArrivals } from "../stores/baro.js";
 import { configureRelicRuntimeCacheFingerprint, warmupPrimeRewardPriceCache } from "./relic.js";
 import { exportRankedHotset, importRankedHotset } from "./wfm/rankedHotset.js";
@@ -47,6 +48,10 @@ export function initStartup(options: StartupOptions = {}): StartupHandle {
   };
 
   startupPriceCacheReady.set(false);
+
+  // Before any view mounts: a lazily mounted view reads these stores on its
+  // first paint and would otherwise show defaults for the user's saved settings.
+  void ensureOverlaySettingsLoaded();
 
   // These steps are independent and run concurrently: a slow snapshot fetch must
   // not hold up local IPC loads; worst case is max(network, local), not their sum.

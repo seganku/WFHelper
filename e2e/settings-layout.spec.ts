@@ -4,6 +4,7 @@ import {
   closeElectronTestHarness,
   launchElectronTestHarness,
   openView,
+  setFontScale,
   setLayoutViewport,
   type ElectronTestHarness,
 } from "./electronTestHarness";
@@ -88,19 +89,6 @@ async function openSettings(page: Page, width: number, forcedColumn?: number): P
       grid.style.columns = column ? `${column}px` : "";
     }
   }, forcedColumn);
-}
-
-async function setFontScale(page: Page, scale: number | null): Promise<void> {
-  await page.evaluate((value) => {
-    if (value === null) localStorage.removeItem("wf_theme_settings");
-    else
-      localStorage.setItem(
-        "wf_theme_settings",
-        JSON.stringify({ version: 1, fontSizes: { globalScale: value } }),
-      );
-  }, scale);
-  await page.reload();
-  await expect(page.locator("#sidebar")).toBeVisible({ timeout: 90_000 });
 }
 
 test.describe("Settings rows degrade without colliding", () => {

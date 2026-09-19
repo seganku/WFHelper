@@ -33,7 +33,8 @@
   let expandedFor = "";
 
   $: db = $itemDb || {};
-  $: gotEnough = node.owned >= node.count;
+  // A blueprint you hold is not the part built, so it earns no check here.
+  $: gotEnough = node.built >= node.count;
   $: qtyLabel =
     node.count >= 1000 ? formatNumber(node.count) : node.count > 1 ? `${node.count}x` : "";
 

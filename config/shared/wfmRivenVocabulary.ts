@@ -47,6 +47,18 @@ export function tagToWfmUrlName(tag: string): string | null {
   return TAG_TO_WFM_URL_NAME[tag] || null;
 }
 
+// WFM's "base_damage_/_melee_damage" url_name carries both damage tags.
+const WFM_URL_NAME_TO_TAGS = new Map<string, string[]>();
+for (const [tag, urlName] of Object.entries(TAG_TO_WFM_URL_NAME)) {
+  WFM_URL_NAME_TO_TAGS.set(urlName, [...(WFM_URL_NAME_TO_TAGS.get(urlName) ?? []), tag]);
+}
+
+export function wfmUrlNameToTag(urlName: string, isMelee: boolean): string | null {
+  const tags = WFM_URL_NAME_TO_TAGS.get(urlName);
+  if (!tags) return null;
+  return tags.find((tag) => tag.includes("Melee") === isMelee) ?? tags[0];
+}
+
 // The game spells polarity AP_ATTACK where WFM names it after the focus school.
 // A riven only ever rolls AP_ATTACK, AP_DEFENSE or AP_TACTIC, so those three and
 // the names WFM hands back are the whole vocabulary. Any other school is one the

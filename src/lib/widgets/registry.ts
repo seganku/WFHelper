@@ -4,7 +4,6 @@ import type { SectionDescriptor } from "../layout/types.js";
 import type { SidebarViewName } from "../viewRegistry.js";
 import type { WidgetDescriptor } from "./types.js";
 
-/** Layout section ids are `<view>.<name>`, so a widget maps onto `dashboard.<name>`. */
 const SECTION_PREFIX = "dashboard.";
 const WIDGET_PREFIX = "widget.";
 
@@ -25,7 +24,15 @@ export const DASHBOARD_WIDGETS: readonly WidgetDescriptor[] = [
     labelKey: "world.voidFissures",
     defaultSpan: 1,
     allowedSpans: SPAN_ORDER,
-    settings: { limit: "number" },
+    settings: {
+      limit: "number",
+      lith: "boolean",
+      meso: "boolean",
+      neo: "boolean",
+      axi: "boolean",
+      requiem: "boolean",
+      omnia: "boolean",
+    },
     canPopout: true,
   },
   {
@@ -76,17 +83,12 @@ export const DASHBOARD_WIDGETS: readonly WidgetDescriptor[] = [
     id: "widget.recentRuns",
     labelKey: "arbi.title",
     defaultSpan: "full",
-    // A run row carries date, node, duration, rotations and vitus; one column
-    // clips it, so the narrow end of the cycle stops at two.
     allowedSpans: [2, "full"],
     settings: { limit: "number" },
     canPopout: true,
   },
 ];
 
-/** Tab each widget's "open" link goes to. Kept beside the registry rather than on
-    the descriptor so the widget contract stays free of routing. A home view always
-    owns a sidebar row, so it also has a nav icon and may carry a view accent. */
 export const WIDGET_HOME_VIEWS: Readonly<Record<string, SidebarViewName>> = {
   "widget.cycles": "world",
   "widget.fissures": "world",
@@ -99,19 +101,28 @@ export const WIDGET_HOME_VIEWS: Readonly<Record<string, SidebarViewName>> = {
   "widget.recentRuns": "arbi",
 };
 
-/** Setting names are shared across widgets, so their label, default and bounds
-    live once here instead of once per descriptor. */
 export const WIDGET_SETTING_LABEL_KEYS: Readonly<Record<string, MessageKey>> = {
   limit: "dashboard.rowLimit",
   allTradables: "inventory.value.allTradables",
+  lith: "relics.tier.lith",
+  meso: "relics.tier.meso",
+  neo: "relics.tier.neo",
+  axi: "relics.tier.axi",
+  requiem: "relics.tier.requiem",
+  omnia: "relics.tier.omnia",
 };
 
 export const WIDGET_SETTING_DEFAULTS: Readonly<Record<string, boolean | number | string>> = {
   limit: 5,
   allTradables: false,
+  lith: true,
+  meso: true,
+  neo: true,
+  axi: true,
+  requiem: true,
+  omnia: true,
 };
 
-/** Inclusive bounds for numeric settings; a stored value outside them is clamped. */
 export const WIDGET_SETTING_RANGES: Readonly<Record<string, { min: number; max: number }>> = {
   limit: { min: 1, max: 20 },
 };
@@ -124,8 +135,6 @@ export function sectionIdFor(widgetId: string): string {
   return `${SECTION_PREFIX}${widgetId.slice(WIDGET_PREFIX.length)}`;
 }
 
-/** The dashboard's widgets as layout sections, so reorder, hide, span, undo and
-    presets come from the layout store instead of a second engine. */
 export function dashboardSectionDescriptors(): SectionDescriptor[] {
   return DASHBOARD_WIDGETS.map((widget) => ({
     id: sectionIdFor(widget.id),

@@ -16,10 +16,12 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("Sobek Visi-toxican"))).toEqual({
       primary: "Sobek Riven",
       secondary: "Visi-toxican",
+      rank: null,
     });
     expect(tradeItemLabel(item("Boar Acri-saticron"))).toEqual({
       primary: "Boar Riven",
       secondary: "Acri-saticron",
+      rank: null,
     });
   });
 
@@ -27,6 +29,7 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("Sobek Critacan"))).toEqual({
       primary: "Sobek Riven",
       secondary: "Critacan",
+      rank: null,
     });
   });
 
@@ -34,6 +37,7 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("Kuva Bramma Croni-tempitis"))).toEqual({
       primary: "Kuva Bramma Riven",
       secondary: "Croni-tempitis",
+      rank: null,
     });
   });
 
@@ -41,6 +45,7 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("Rubico Visio-Critatis (RIVEN RANK 8)"))).toEqual({
       primary: "Rubico Riven",
       secondary: "Visio-Critatis",
+      rank: null,
     });
   });
 
@@ -48,6 +53,7 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("Rifle Riven Mod"))).toEqual({
       primary: "Rifle Riven Mod",
       secondary: null,
+      rank: null,
     });
   });
 
@@ -55,6 +61,7 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("/AF_Special/Imprint/Bibou"))).toEqual({
       primary: "Bibou",
       secondary: null,
+      rank: null,
     });
   });
 
@@ -62,13 +69,42 @@ describe("tradeItemLabel", () => {
     expect(tradeItemLabel(item("", "/Lotus/Types/Items/MiscItems/Tellurium")).primary).toBe(
       "Tellurium",
     );
-    expect(tradeItemLabel(item(""))).toEqual({ primary: "", secondary: null });
+    expect(tradeItemLabel(item(""))).toEqual({ primary: "", secondary: null, rank: null });
   });
 
   it("leaves an ordinary item alone", () => {
     expect(tradeItemLabel(item("Ash Prime Chassis"))).toEqual({
       primary: "Ash Prime Chassis",
       secondary: null,
+      rank: null,
+    });
+  });
+
+  it("moves the dialog's rank tag out of the name", () => {
+    expect(tradeItemLabel(item("Arcane Energize (RANK 5)"))).toEqual({
+      primary: "Arcane Energize",
+      secondary: null,
+      rank: 5,
+    });
+    expect(tradeItemLabel(item("Primed Flow (Rank 10)"))).toEqual({
+      primary: "Primed Flow",
+      secondary: null,
+      rank: 10,
+    });
+  });
+
+  it("keeps rank zero, which is the rank most arcanes sell at", () => {
+    expect(tradeItemLabel(item("Arcane Energize (RANK 0)"))).toMatchObject({
+      primary: "Arcane Energize",
+      rank: 0,
+    });
+  });
+
+  it("invents no rank for a parenthetical that is part of the name", () => {
+    expect(tradeItemLabel(item("Mortus Lungfish (A)"))).toEqual({
+      primary: "Mortus Lungfish (A)",
+      secondary: null,
+      rank: null,
     });
   });
 

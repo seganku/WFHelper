@@ -1,11 +1,11 @@
-// Relic refinements shared by order forms, order books and worker summaries.
+import { toFinitePositiveInt } from "./numeric";
+
 export const WFM_ORDER_SUBTYPES = ["intact", "exceptional", "flawless", "radiant"] as const;
 export const WFM_MOD_VARIANTS = ["regular", "atragraph"] as const;
 export type WfmOrderSubtype = (typeof WFM_ORDER_SUBTYPES)[number];
 
 const WFM_ORDER_SUBTYPE_SET = new Set<string>(WFM_ORDER_SUBTYPES);
 
-/** Case-insensitive subtype allowlist; null for anything else. */
 export function parseWfmOrderSubtype(value: unknown): WfmOrderSubtype | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
@@ -19,19 +19,26 @@ export function normalizeSubtype(value: string | null | undefined): string | nul
   return !trimmed || trimmed === "regular" ? null : trimmed;
 }
 
-export interface WfmOrderBookEntry {
+export interface UnitPricedListing {
+  /** Price of ONE trade, exactly as WFM lists it. A bulk order hands over
+   *  `perTrade` items for it, so only `unitPlatinum` compares across orders. */
+  platinum: number;
+  unitPlatinum?: number;
+}
+
+export interface WfmOrderBookEntry extends UnitPricedListing {
   userName: string;
   status: string | null;
-  platinum: number;
   quantity: number;
+  perTrade: number;
+  unitPlatinum: number;
   rank: number | null;
   avatar: string | null;
 }
 
 type WfmOrderType = "sell" | "buy";
 
-interface WfmOrderPriceEntry {
-  platinum: number;
+interface WfmOrderPriceEntry extends UnitPricedListing {
   status: string | null;
 }
 
@@ -81,6 +88,31 @@ export function isActiveOrderStatus(status: string | null): boolean {
   return status === "ingame" || status === "online";
 }
 
+/** Per-item price of a bulk order, kept to two decimals like WFM's own site. */
+function unitPlatinumOf(platinum: number, perTrade: number): number {
+  return Math.round((platinum / perTrade) * 100) / 100;
+}
+
+/** Items a bulk order hands over per trade: v2 spells it `perTrade`, v1
+ *  `per_trade`. warframe.market clamps it into [1, quantity], so pass the
+ *  listing's own quantity wherever that clamp is part of the contract. */
+export function normalizePerTrade(value: unknown, quantity?: number): number {
+  const parsed = Number(value ?? 1);
+  if (!Number.isInteger(parsed) || parsed <= 0) return 1;
+  const cap = toFinitePositiveInt(quantity);
+  return cap == null ? parsed : Math.min(parsed, cap);
+}
+
+export function formatUnitPlatinum(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "");
+}
+
+export function listingUnitPrice(listing: UnitPricedListing): number {
+  const unit = listing.unitPlatinum;
+  return typeof unit === "number" && Number.isFinite(unit) && unit > 0 ? unit : listing.platinum;
+}
+
 export function bestOrderPrice(
   entries: WfmOrderPriceEntry[],
   orderType: WfmOrderType,
@@ -88,8 +120,9 @@ export function bestOrderPrice(
 ): number | null {
   const list = activeOnly ? entries.filter((entry) => isActiveOrderStatus(entry.status)) : entries;
   if (list.length === 0) return null;
-  const prices = list.map((entry) => entry.platinum);
-  return orderType === "sell" ? Math.min(...prices) : Math.max(...prices);
+  const prices = list.map(listingUnitPrice);
+  const best = orderType === "sell" ? Math.min(...prices) : Math.max(...prices);
+  return Math.max(1, Math.round(best));
 }
 
 function parseOrderRank(order: Record<string, unknown>): number | null {
@@ -169,11 +202,16 @@ export function normalizeWfmOrderBookSide(
       const quantity =
         Number.isFinite(quantityRaw) && quantityRaw > 0 ? Math.floor(quantityRaw) : 1;
 
+      const perTrade = normalizePerTrade(order.perTrade ?? order.per_trade, quantity);
+
+      const platinum = Math.round(platinumRaw);
       return {
         userName,
         status: parseOrderStatus(order),
-        platinum: Math.round(platinumRaw),
+        platinum,
         quantity,
+        perTrade,
+        unitPlatinum: unitPlatinumOf(platinum, perTrade),
         rank,
         avatar: parseOrderAvatar(order),
       } satisfies WfmOrderBookEntry;
@@ -181,8 +219,10 @@ export function normalizeWfmOrderBookSide(
     .filter((entry): entry is WfmOrderBookEntry => entry != null);
 
   entries.sort((a, b) => {
-    if (a.platinum !== b.platinum) {
-      return orderType === "sell" ? a.platinum - b.platinum : b.platinum - a.platinum;
+    if (a.unitPlatinum !== b.unitPlatinum) {
+      return orderType === "sell"
+        ? a.unitPlatinum - b.unitPlatinum
+        : b.unitPlatinum - a.unitPlatinum;
     }
     if (a.quantity !== b.quantity) return b.quantity - a.quantity;
     return a.userName.localeCompare(b.userName);

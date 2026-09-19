@@ -73,7 +73,6 @@ interface Reachability {
   viewportHeight: number;
   panelTop: number;
   stickyBottom: number;
-  /** Whether hit-testing the button centre lands on the button itself. */
   hitsButton: boolean;
 }
 
@@ -97,9 +96,6 @@ async function measure(page: Page): Promise<Reachability> {
   });
 }
 
-// Issue #29: the panel is sticky in the same scroll container as the filter
-// band, which is opaque and paints above it. Pinned at the scrollport top, its
-// whole action row lands under the band and out of reach of a click.
 test.describe("Inventory order book stays reachable while scrolled", () => {
   test.setTimeout(180_000);
 
@@ -133,8 +129,7 @@ test.describe("Inventory order book stays reachable while scrolled", () => {
   async function openPanelDeepInTheList(): Promise<void> {
     const cards = page.locator(".item-card");
     await expect.poll(async () => cards.count(), { timeout: 30_000 }).toBeGreaterThan(24);
-    // Playwright scrolls the target into view, which leaves the grid deep in
-    // the list exactly the way the report describes.
+    // Playwright scrolls the target into view, which leaves the grid deep in the list.
     await cards.nth(24).click();
     await expect(page.locator("[data-orderbook-wfm]")).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(400);
@@ -166,5 +161,58 @@ test.describe("Inventory order book stays reachable while scrolled", () => {
     expect(probe.buttonTop).toBeGreaterThanOrEqual(0);
     expect(probe.buttonBottom).toBeLessThanOrEqual(probe.viewportHeight);
     expect(probe.hitsButton).toBe(true);
+  });
+
+  // Runs last: it leaves a fetch stub in the page for the rest of the session.
+  test("a bulk buy order is priced per item, not per trade", async () => {
+    await setLayoutViewport(page, 1280, 700);
+    await resetPanel();
+
+    // 97p buys six arcanes here, so the book must read 16.17p, never 97p.
+    await page.evaluate(() => {
+      const original = window.fetch;
+      window.fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes("/orders/item/")) return original(input, init);
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                type: "buy",
+                platinum: 97,
+                quantity: 24,
+                perTrade: 6,
+                visible: true,
+                user: { ingameName: "BulkBuyer", status: "ingame" },
+              },
+              {
+                type: "sell",
+                platinum: 30,
+                quantity: 1,
+                visible: true,
+                user: { ingameName: "SingleSeller", status: "ingame" },
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+    });
+
+    await page.locator(".item-card").first().click();
+    await expect(page.locator("[data-orderbook-panel]")).toBeVisible({ timeout: 30_000 });
+
+    const bulkPrice = page.locator("[data-orderbook-unit-plat='16.17']");
+    await expect(bulkPrice).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.locator("[data-orderbook-per-trade='6']")).toBeVisible();
+    await expect(page.locator("[data-orderbook-best-buy]")).toHaveAttribute(
+      "data-orderbook-best-buy",
+      "16.17",
+    );
+    await expect(page.locator("[data-orderbook-spread]")).toHaveAttribute(
+      "data-orderbook-spread",
+      "13.83",
+    );
   });
 });

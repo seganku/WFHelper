@@ -187,7 +187,6 @@ describe("overlay window transparency", () => {
 
     controller.createOverlayWindow({ show: false });
 
-    // Only a transparent window can blank instead of unmap on native Wayland.
     expect(captured[0].transparent).toBe(true);
     expect(captured[0].backgroundColor).toBeUndefined();
   });
@@ -231,6 +230,11 @@ describe("first-load zoom", () => {
       };
 
       showInactive() {}
+      isFocused() {
+        return false;
+      }
+      setFocusable() {}
+      setIgnoreMouseEvents() {}
       loadFile() {
         return Promise.resolve();
       }
@@ -274,7 +278,6 @@ describe("first-load zoom", () => {
 
     controller.createOverlayWindow({ show: false });
     const win = ctx.overlayWindow as unknown as FakeZoomWindow;
-    // The zoom set while loadFile is in flight is reset by the navigation commit.
     win.webContents.setZoomFactor.mockClear();
 
     controller.markRendererReady(1);
@@ -404,14 +407,12 @@ function createPresentationProbe(options: {
   return { controller, windows, ctx, contentEvents, logWarn };
 }
 
-/** Fire a window event the controller subscribed to; the fake only records them. */
 function fireWindowEvent(win: { on: Mock }, event: string): void {
   for (const [name, handler] of win.on.mock.calls) {
     if (name === event) (handler as () => void)();
   }
 }
 
-/** Same, for the handlers that take an event object. */
 function fireWindowEventWith(win: { on: Mock }, event: string, arg: unknown): void {
   for (const [name, handler] of win.on.mock.calls) {
     if (name === event) (handler as (value: unknown) => void)(arg);
@@ -424,8 +425,6 @@ const shownLines = (logWarn: Mock): number =>
 describe("re-entrant show", () => {
   it("puts an overlay up once when one trigger creates it twice", () => {
     const probe = createPresentationProbe({ platform: "win32", nativeWayland: false });
-    // The route creates the window, then the feature controller creates it
-    // again with the anchor it resolved. Both reach createOverlayWindow.
     probe.controller.createOverlayWindow();
     probe.controller.createOverlayWindow();
 
@@ -443,8 +442,6 @@ describe("re-entrant show", () => {
 
     probe.controller.createOverlayWindow();
 
-    // Keep-mapped: the window never unmapped, so the content coming back is what
-    // "shown again" means for it.
     expect(probe.controller.isOverlayWindowVisible()).toBe(true);
     expect(probe.contentEvents(win).at(-1)).toEqual([OVERLAY_CONTENT_VISIBLE, true]);
   });
@@ -457,16 +454,11 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
 
   it("activates for every transparent overlay, opaque panels excepted", () => {
     const cases = [
-      // Windows: a hidden transparent window re-shows as a black box, and the
-      // rebuild that avoided it crashed the compositor.
       { platform: "win32" as const, nativeWayland: false, keepMapped: true },
       { platform: "win32" as const, nativeWayland: false, transparent: false, keepMapped: false },
       { platform: "linux" as const, nativeWayland: false, keepMapped: false },
-      // Planner, riven and arbi request an opaque window; linux overrides that.
       { platform: "linux" as const, nativeWayland: true, transparent: false, keepMapped: true },
       { platform: "linux" as const, nativeWayland: true, keepMapped: true },
-      // niri leaves a blanked window on screen still taking clicks, so there the
-      // overlay has to unmap for real however transparent it is.
       { platform: "linux" as const, nativeWayland: true, tiling: true, keepMapped: false },
       {
         platform: "linux" as const,
@@ -488,9 +480,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
   });
 
   it("shows a new window before raising it", () => {
-    // moveTop() un-hides a hidden window on Windows, so raising first made
-    // moveTop the call that revealed the overlay - without the inactive part,
-    // which handed it the foreground and unfocused the game on every open.
     const { controller, windows } = createPresentationProbe({
       platform: "win32",
       nativeWayland: false,
@@ -569,6 +558,53 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(controller.isOverlayWindowVisible()).toBe(true);
   });
 
+  it.each([
+    {
+      platform: "win32" as const,
+      nativeWayland: false,
+      interactive: false,
+      neverClickThrough: false,
+    },
+    {
+      platform: "win32" as const,
+      nativeWayland: false,
+      interactive: true,
+      neverClickThrough: false,
+    },
+    {
+      platform: "win32" as const,
+      nativeWayland: false,
+      interactive: false,
+      neverClickThrough: true,
+    },
+    {
+      platform: "linux" as const,
+      nativeWayland: true,
+      interactive: true,
+      neverClickThrough: false,
+    },
+  ])("reapplies delivered hidden state to a new document on READY: %s", (options) => {
+    const { controller, windows, contentEvents, ctx } = createPresentationProbe(options);
+    controller.createOverlayWindow();
+    controller.markRendererReady(1);
+    controller.hideOverlayWindow();
+    controller.setOverlayInteractiveMode(options.interactive);
+    const win = windows[0];
+    win.webContents.send.mockClear();
+    win.setIgnoreMouseEvents.mockClear();
+    win.setFocusable.mockClear();
+
+    controller.markRendererReady(1);
+
+    expect(contentEvents(win).at(-1)).toEqual([OVERLAY_CONTENT_VISIBLE, false]);
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    expect(win.setFocusable).toHaveBeenLastCalledWith(false);
+    expect(ctx.overlayInteractiveMode).toBe(options.interactive);
+    controller.showOverlayWindowInactive();
+    expect(contentEvents(win).at(-1)).toEqual([OVERLAY_CONTENT_VISIBLE, true]);
+    expect(win.setFocusable).toHaveBeenLastCalledWith(options.interactive);
+  });
+
   it("auto-hide uses the logical hide path", () => {
     vi.useFakeTimers();
     const { controller, windows, contentEvents } = createPresentationProbe({
@@ -639,8 +675,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     vi.advanceTimersByTime(5_000);
     controller.setOverlayInteractiveMode(true);
 
-    // An immediate raise loses the race with the focusable flip; only the
-    // delayed reassert rescues the window.
     controller.setOverlayInteractiveMode(false);
     win.setAlwaysOnTop.mockClear();
     win.moveTop.mockClear();
@@ -735,7 +769,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     vi.advanceTimersByTime(5_000);
     win.moveTop.mockClear();
 
-    // F7-off schedules a reassert and its blur() fires the listener's too.
     controller.setOverlayInteractiveMode(false);
     fireWindowEvent(win, "blur");
     win.moveTop.mockClear();
@@ -765,8 +798,8 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(win.moveTop).toHaveBeenCalled();
   });
 
-  it("applies the input flags while hidden so the mode cannot desync", () => {
-    const { controller, windows } = createPresentationProbe({
+  it("remembers requested interaction while a blank window stays passive", () => {
+    const { controller, windows, ctx } = createPresentationProbe({
       platform: "win32",
       nativeWayland: false,
     });
@@ -780,10 +813,25 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
 
     controller.setOverlayInteractiveMode(true);
 
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
-    expect(win.setFocusable).toHaveBeenLastCalledWith(true);
-    // Nothing on screen yet, so stacking and focus stay untouched.
+    expect(ctx.overlayInteractiveMode).toBe(true);
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    expect(win.setFocusable).toHaveBeenLastCalledWith(false);
     expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it("keeps a hidden sibling passive when an existing window is refreshed", () => {
+    const { controller, windows } = createPresentationProbe({
+      platform: "win32",
+      nativeWayland: false,
+    });
+    controller.createOverlayWindow();
+    controller.hideOverlayWindow();
+    controller.setOverlayInteractiveMode(true);
+    controller.createOverlayWindow({ show: false });
+
+    expect(controller.isOverlayWindowVisible()).toBe(false);
+    expect(windows[0].setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    expect(windows[0].setFocusable).toHaveBeenLastCalledWith(false);
   });
 
   it("re-asserts the interactive mode when a hidden window is shown again", () => {
@@ -821,7 +869,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(stale.destroy).toHaveBeenCalledTimes(1);
     expect(windows).toHaveLength(2);
     const fresh = windows[1];
-    // The rebuilt window must never have been click-through - X11 cannot undo it.
     expect(fresh.setIgnoreMouseEvents).not.toHaveBeenCalledWith(true);
     expect(fresh.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
     expect(fresh.setBounds).toHaveBeenCalledWith(stale.getBounds(), false);
@@ -832,9 +879,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     ]);
   });
 
-  // destroy() emitting "closed" a tick late would otherwise land after the
-  // replacement is registered and tear it down: window on screen, handle null,
-  // auto-hide cancelled, nothing left able to close it.
   it("ignores a late closed event from the window the rebuild replaced", () => {
     const { controller, windows, ctx } = createPresentationProbe({
       platform: "linux",
@@ -880,7 +924,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
 
     await vi.advanceTimersByTimeAsync(2_000);
 
-    // X11 loses the empty input region when it is set before the map.
     expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true);
   });
 
@@ -895,7 +938,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     win.setIgnoreMouseEvents.mockClear();
     controller.setOverlayInteractiveMode(false);
 
-    // An identical shape is invisible to the compositor; the clear makes it a change.
     expect(win.setIgnoreMouseEvents.mock.calls).toEqual([[false], [true]]);
   });
 
@@ -936,8 +978,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
   });
 
   it("keeps the window on a native-Wayland tiling compositor going interactive", () => {
-    // Keep-mapped mode is off on niri and friends, which is not a reason to
-    // rebuild: only X11 refuses to hand the input shape back.
     const { controller, windows } = createPresentationProbe({
       platform: "linux",
       nativeWayland: true,
@@ -984,8 +1024,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     const win = windows[0];
     win.setIgnoreMouseEvents.mockClear();
 
-    // The arbi summary stays mapped while blank, so it would swallow every
-    // click over the game unless the shape is dropped with the content.
     controller.hideOverlayWindow();
     expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
 
@@ -1008,8 +1046,39 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(windows[0].setIgnoreMouseEvents).not.toHaveBeenCalledWith(true);
   });
 
-  // Every re-show used to destroy and rebuild the window, which crashed the
-  // Chromium compositor in long sessions. One window carries the whole run now.
+  it("cannot restore clicks when a never-click-through window reports ready after a hide", () => {
+    const { controller, windows } = createPresentationProbe({
+      platform: "win32",
+      nativeWayland: false,
+      neverClickThrough: true,
+    });
+
+    controller.createOverlayWindow();
+    controller.hideOverlayWindow();
+    windows[0].setIgnoreMouseEvents.mockClear();
+    windows[0].setFocusable.mockClear();
+
+    controller.markRendererReady(1);
+
+    expect(windows[0].setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    expect(windows[0].setFocusable).toHaveBeenLastCalledWith(false);
+  });
+
+  it("restores clicks when a visible never-click-through window reports ready", () => {
+    const { controller, windows } = createPresentationProbe({
+      platform: "win32",
+      nativeWayland: false,
+      neverClickThrough: true,
+    });
+
+    controller.createOverlayWindow();
+    windows[0].setIgnoreMouseEvents.mockClear();
+
+    controller.markRendererReady(1);
+
+    expect(windows[0].setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  });
+
   it("survives a long run of Windows shows and hides on one window", () => {
     const { controller, windows } = createPresentationProbe({
       platform: "win32",
@@ -1067,7 +1136,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true);
     expect(win.blur).toHaveBeenCalledTimes(1);
     expect(win.setFocusable).toHaveBeenLastCalledWith(false);
-    // Still mapped; only the logical flag knows it is down.
     expect(win.isVisible()).toBe(true);
     expect(controller.isOverlayWindowVisible()).toBe(false);
   });
@@ -1091,8 +1159,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(windows).toHaveLength(1);
   });
 
-  // The first Windows show still maps the window, and a raise can lose that
-  // race. Wayland has no stacking to re-assert, so there it stays off.
   it("re-asserts the raise on Windows but not on native Wayland", async () => {
     vi.useFakeTimers();
     const onWindows = createPresentationProbe({ platform: "win32", nativeWayland: false });
@@ -1109,8 +1175,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(onWayland.windows[0].moveTop).not.toHaveBeenCalled();
   });
 
-  // Rebuilding on X11 would map a fresh window per popup, which is the focus
-  // steal keep-mapped mode exists to avoid; the black box is a Windows artefact.
   it("re-shows a transparent linux window instead of rebuilding it", () => {
     const { controller, windows } = createPresentationProbe({
       platform: "linux",
@@ -1129,8 +1193,6 @@ describe("keep-mapped presentation mode (Windows and native Wayland)", () => {
     expect(win.showInactive.mock.calls.length).toBeGreaterThan(1);
   });
 
-  // An opaque panel unmaps for real, so leaving interactive mode has a window
-  // to bring back; a keep-mapped one never went away.
   it("passive interactive-mode exit re-shows a window that really hides", () => {
     const { controller, windows } = createPresentationProbe({
       platform: "win32",
@@ -1155,8 +1217,6 @@ describe("show raise reassert", () => {
     vi.useRealTimers();
   });
 
-  // A re-shown planner landed behind the game and nothing rescued it - the
-  // z-order poll deliberately skips windows already always-on-top.
   it("re-raises a re-shown window after the map settles", async () => {
     vi.useFakeTimers();
     const { controller, windows } = createPresentationProbe({
@@ -1198,8 +1258,6 @@ describe("show raise reassert", () => {
 });
 
 describe("moveWindowBy", () => {
-  // Stands in for any window that returns a smaller size than it was handed:
-  // a move must not write the size at all, or the overlay shrinks per tick.
   function fakeWindow(bounds: { x: number; y: number; width: number; height: number }) {
     const state = { ...bounds };
     return {
@@ -1280,7 +1338,10 @@ describe("createOverlayWindowBoundsChangeHandler", () => {
   });
 });
 
-function createResizeProbe() {
+function createResizeProbe(
+  windowHeight = 140,
+  grantTrim: { width: number; height: number } | null = null,
+) {
   const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
   const saves: OverlaySavedWindowBounds[] = [];
   let currentBounds = { x: 300, y: 400, width: 980, height: 140 };
@@ -1313,12 +1374,22 @@ function createResizeProbe() {
     loadFile = vi.fn(() => Promise.resolve());
     setAspectRatio = vi.fn();
     setBounds = vi.fn((bounds: typeof currentBounds) => {
-      currentBounds = { ...bounds };
-      this.listeners.get("resize")?.();
+      if (!grantTrim) {
+        currentBounds = { ...bounds };
+        this.listeners.get("resize")?.();
+        return;
+      }
+      currentBounds = {
+        ...bounds,
+        width: bounds.width - grantTrim.width,
+        height: bounds.height - grantTrim.height,
+      };
+      setTimeout(() => this.listeners.get("resize")?.(), 1);
     });
     getBounds = vi.fn(() => currentBounds);
     isDestroyed = vi.fn(() => false);
     isVisible = vi.fn(() => false);
+    isFocused = vi.fn(() => false);
     showInactive = vi.fn();
     moveTop = vi.fn();
     hide = vi.fn();
@@ -1354,6 +1425,7 @@ function createResizeProbe() {
     hardenBrowserWindowNavigation: () => {},
     overlayWindowFile: "D:\\app\\renderer\\overlay.html",
     windowStateKey: "reward",
+    windowHeight,
     onWindowBoundsChanged: (key, bounds) => {
       saves.push(bounds);
       persist(key, bounds);
@@ -1367,6 +1439,7 @@ function createResizeProbe() {
   vi.advanceTimersByTime(1);
 
   return {
+    display,
     saves,
     ctx,
     controller,
@@ -1392,6 +1465,106 @@ function createResizeProbe() {
 describe("overlay resize", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("fits content height after a position-only drag without saving manual dimensions", () => {
+    const probe = createResizeProbe(236);
+    probe.moveTo(350, 450);
+    probe.controller.fitOverlayContentHeight(330.2);
+    vi.advanceTimersByTime(300);
+
+    expect(probe.window().getBounds()).toEqual({ x: 350, y: 450, width: 980, height: 331 });
+    expect(probe.ctx.overlaySettings.overlayWindowBounds?.reward).toEqual({
+      x: 350,
+      y: 450,
+      displayId: "1",
+    });
+    probe.controller.fitOverlayContentHeight(100);
+    vi.advanceTimersByTime(300);
+    expect(probe.window().getBounds().height).toBe(236);
+    expect(probe.saves.every((bounds) => bounds.width == null && bounds.height == null)).toBe(true);
+  });
+
+  it.each(["width", "height"] as const)("preserves manually saved %s", (dimension) => {
+    const probe = createResizeProbe(236);
+    probe.ctx.overlaySettings.overlayWindowBounds!.reward![dimension] = 400;
+    probe.controller.positionOverlayWindow();
+    const before = probe.window().getBounds();
+    probe.controller.fitOverlayContentHeight(600);
+    expect(probe.window().getBounds()).toEqual(before);
+  });
+
+  it("does not replace a pending manual resize with content height", () => {
+    const probe = createResizeProbe(236);
+    probe.resizeTo(1100, 280);
+    probe.controller.fitOverlayContentHeight(600);
+    vi.advanceTimersByTime(300);
+    expect(probe.window().getBounds()).toMatchObject({ width: 1100, height: 280 });
+    expect(probe.ctx.overlaySettings.overlayWindowBounds?.reward).toMatchObject({
+      width: 1100,
+      height: 280,
+    });
+  });
+
+  it("re-applies a content height reported while a resize save was pending", () => {
+    const probe = createResizeProbe(236);
+    probe.resizeTo(1100, 280);
+    probe.controller.fitOverlayContentHeight(330);
+    expect(probe.window().getBounds()).toMatchObject({ width: 1100, height: 280 });
+
+    probe.ctx.overlayInteractiveMode = false;
+    vi.advanceTimersByTime(300);
+
+    expect(probe.ctx.overlaySettings.overlayWindowBounds?.reward).not.toHaveProperty("height");
+    expect(probe.window().getBounds()).toMatchObject({ width: 980, height: 330 });
+  });
+
+  it("keeps a trimmed frame grant out of the saved size, however many moves it takes", () => {
+    const probe = createResizeProbe(236, { width: 16, height: 8 });
+    probe.controller.fitOverlayContentHeight(330);
+    vi.advanceTimersByTime(300);
+
+    expect(probe.window().getBounds()).toMatchObject({ width: 964, height: 322 });
+
+    for (let move = 0; move < 3; move += 1) {
+      probe.moveTo(350 + move, 450 + move);
+      vi.advanceTimersByTime(300);
+      probe.controller.positionOverlayWindow();
+      vi.advanceTimersByTime(300);
+    }
+
+    expect(probe.window().getBounds()).toMatchObject({ width: 964, height: 322 });
+    expect(probe.saves.every((bounds) => bounds.width == null && bounds.height == null)).toBe(true);
+  });
+
+  it("starts a replacement window at default height without persisting automatic size", () => {
+    const probe = createResizeProbe(236);
+    probe.controller.fitOverlayContentHeight(330);
+    vi.advanceTimersByTime(300);
+    probe.window().listeners.get("closed")?.();
+    probe.controller.createOverlayWindow({ show: false });
+    expect(probe.window().getBounds().height).toBe(236);
+    expect(probe.ctx.overlaySettings.overlayWindowBounds?.reward).not.toHaveProperty("height");
+  });
+
+  it("scales automatic height and clamps it to the display work area", () => {
+    const probe = createResizeProbe(236);
+    probe.ctx.overlaySettings.overlayScale = 1.25;
+    probe.controller.fitOverlayContentHeight(300);
+    expect(probe.window().getBounds()).toMatchObject({ width: 1225, height: 375 });
+    probe.controller.fitOverlayContentHeight(10000);
+    const bounds = probe.window().getBounds();
+    expect(bounds.height).toBeLessThanOrEqual(probe.display.workArea.height);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(probe.display.workArea.height);
+    probe.controller.fitOverlayContentHeight(236);
+    expect(probe.window().getBounds().height).toBe(295);
+  });
+
+  it.each([NaN, Infinity, 0, -1, 10001])("ignores invalid content height %s", (height) => {
+    const probe = createResizeProbe(236);
+    const before = probe.window().getBounds();
+    probe.controller.fitOverlayContentHeight(height);
+    expect(probe.window().getBounds()).toEqual(before);
   });
 
   it.each(["left", "right", "top", "bottom", "bottom-right"])(
@@ -1605,7 +1778,6 @@ describe("layer-shell presentation", () => {
     expect(height).toBeGreaterThan(0);
   });
 
-  // The window is never OS-visible in this mode, so isVisible() would lie.
   it("tracks visibility logically and drops the surface on hide", () => {
     const probe = probeWithLayer(true);
     probe.controller.createOverlayWindow();
@@ -1619,8 +1791,6 @@ describe("layer-shell presentation", () => {
     expect(probe.windows[0].hide).not.toHaveBeenCalled();
   });
 
-  // The surface swaps its input region in place, so the rebuild the X11 path
-  // needs would only throw away a working surface.
   it("takes clicks by making the surface interactive, not by rebuilding", () => {
     const probe = probeWithLayer(true);
     probe.controller.createOverlayWindow();
@@ -1654,8 +1824,6 @@ describe("layer-shell presentation", () => {
     expect(probe.windows[0].options.webPreferences.offscreen).toBe(true);
   });
 
-  // The arbi summary is clickable without the unlock hotkey, so its surface must
-  // take input even though the controller reports passive mode.
   it("gives a never-click-through overlay an input region straight away", () => {
     const presentation = fakePresentation();
     const probe = createPresentationProbe({
@@ -1694,10 +1862,8 @@ describe("layer-shell presentation", () => {
 
     moveOverlayWindowBy(win as never, 40, -25);
 
-    // The centred default on a 1920x1080 display, moved by the delta.
     expect(saves).toEqual([{ x: 510, y: 580, displayId: "1" }]);
     expect(presentation.applyGeometry).toHaveBeenCalledTimes(1);
-    // The window behind a layer surface is offscreen, so moving it does nothing.
     expect(win.setPosition).not.toHaveBeenCalled();
   });
 
@@ -1784,7 +1950,6 @@ describe("compositor placement", () => {
     await probeWithPlacer(true, place);
 
     expect(place).toHaveBeenCalledWith("WFHelper Relic Rewards", null);
-    // A compositor that placed the window is not asked a second time.
     expect(place).toHaveBeenCalledTimes(1);
   });
 
@@ -1827,8 +1992,6 @@ describe("window title", () => {
     const win = probe.windows[0];
 
     expect(win.setTitle).toHaveBeenCalledWith("WFHelper Relic Rewards");
-    // Two overlays share one html file, so the page title would collapse them
-    // back into one name and no compositor rule could tell them apart.
     const prevented = vi.fn();
     fireWindowEventWith(win, "page-title-updated", { preventDefault: prevented });
     expect(prevented).toHaveBeenCalled();
